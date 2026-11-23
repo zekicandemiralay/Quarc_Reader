@@ -54,6 +54,11 @@ opens, where you left off.
 - **Paper** is sepia by default. Pick white, dark, or "follow theme" as the default in **Settings → Reading → Paper**; the
   **View** menu changes it for one document.
 - Double-tap fits the page (and, on a fitted page, zooms to its width); pinch to zoom as far as you need for fine handwriting.
+- **Find a word:** press **Ctrl+F** (**Cmd+F** on a Mac) or tap the **search** button at the top. Type, and every place the word
+  occurs in the whole document is marked; **Enter** / the arrows go to the next one (**Shift+Enter** back), **Esc** closes. The
+  counter ("3 of 17") fills in as the document is searched. Capital letters never matter, and accents don't either unless you
+  switch **á** on ("cay" then no longer finds "çay"). A scanned PDF has no text to search. In a document that lives only on
+  your server, searching reads all of it once.
 - Your place is remembered, and follows you to your other devices for synced documents.
 - **Bookmark** this page with the ribbon icon; the list icon shows your bookmarks, highlights and notes.
 - Tap the corner button in the page counter to hide the toolbars while you read.

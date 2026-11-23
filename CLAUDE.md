@@ -56,6 +56,19 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   Excalidraw), text/images → Excalidraw rasterised PNG (injected), text marks → real `/Highlight|/Underline|/StrikeOut`
   annotations (+ `/Text` for notes), note pages → real pages with their ruling. Coordinates go through pdf.js'
   `viewport.convertToPdfPoint` so rotated/cropped pages work.
+- **Find in text** (Ctrl/Cmd+F, F3 / Ctrl+G = next, Esc, plus a search button in the app bars): `reader/findText.js` is the pure part
+  (`fold` = case + NFKD/NFKC + optional accent stripping + Turkish ı/İ + whitespace runs and soft hyphens, with a map back to the
+  original index; page text = items joined with `\n` after `hasEOL`; `matchSegments`; hit numbering) and is unit-tested.
+  `reader/findIndex.js` reads every page's text once (`getTextContent`, cached per accent setting) and `scanBook` counts hits,
+  starting at the page being read so the first hit is known at once; `reader/useFind.js` is the controller (debounce, current
+  hit, next/prev with wrap, "reveal when its page's text layer exists"); `FindBar.jsx` is the pill that replaces the tool dock
+  while open. **Hits are drawn on the marks canvas** (`paper.js drawFinds`, violet, `finds` param of `drawMarks`) from
+  rectangles that `TextLayerManager.findRects` measures on the page's own text-layer spans — so layers must exist
+  (`textNeeded` includes `findOpen`) and a hit on a far page appears once the view has gone there. Counting (index) and showing
+  (layer) fold the same text the same way, so "the 3rd hit on page 7" means the same thing in both; the index is never mapped to
+  DOM offsets. Ctrl+F is caught on `window` in the capture phase (`stopImmediatePropagation`) — Excalidraw 0.18 has its own
+  Ctrl+F canvas search that would otherwise open. Not done: words hyphenated over a line break, whole-word / regex, searching
+  the whole library, turning a hit into a highlight. A synced document that was never downloaded is read in full by a search.
 - **"Open with" / share target** (`lib/openWith.js`, started from `main.jsx`): every platform hands a PDF over differently and
   ends as plain `File`s in `store/incomingStore.js`; `App.jsx` (`IncomingFiles`) brings a signed-in user to `/` and `Library`
   takes the files like "Add PDF" (the local/sync question, then the reader) — except that **one PDF you already have is just
@@ -110,9 +123,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 98 unit tests (geometry, ink, marks, export, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 114 unit tests (geometry, ink, marks, export, find, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith pen tools library big   (187 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find pen tools library big   (214 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 
@@ -122,7 +135,7 @@ services. Don't patch JS test files with shell/Python string replacement — esc
 ## Not done / next
 
 - EPUB (text highlights + typed notes via CFI); two-page spread in book mode (the page-local storage already allows a
-  different layout); text search inside a PDF; password-protected PDFs; page thumbnails/outline panel; opening a PDF
+  different layout); password-protected PDFs; page thumbnails/outline panel; find-in-text extras (see its bullet above); opening a PDF
   *link* (http/https) from a browser in the app (the "open with" intent filters only cover content/file URIs).
 - Builds: the Android debug APK builds on the dev machine with Android Studio's JDK and SDK (`JAVA_HOME` =
   `C:\Program Files\Android\Android Studio\jbr`, `ANDROID_HOME` = `%LOCALAPPDATA%\Android\Sdk`, then

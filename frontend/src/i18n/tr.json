@@ -256,6 +256,18 @@
     "unavailable": "Bu bağlantı bulunamadı, süresi doldu ya da kapatıldı.",
     "openApp": "Quarc Reader'ı aç"
   },
+  "find": {
+    "title": "Belgede bul",
+    "placeholder": "Belgede bul",
+    "count": "{{current}} / {{total}}",
+    "searching": "Aranıyor…",
+    "noMatches": "Eşleşme yok",
+    "noText": "Aranacak metin yok",
+    "noTextHint": "Bu PDF'de aranacak metin yok (taranmış olabilir).",
+    "prev": "Önceki eşleşme",
+    "next": "Sonraki eşleşme",
+    "accents": "Aksanları eşleştir (ç ≠ c)"
+  },
   "export": {
     "title": "PDF'i kaydet",
     "explain": "Vurguların, notların ve çizimlerin Quarc'ta düzenlenebilir kalır. Kaydetmek, bunları içeren sıradan bir PDF üretir — mürekkep keskin vektör çizgiler, vurgular gerçek PDF vurguları olarak — ve her yerde açılır.",

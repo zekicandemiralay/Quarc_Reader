@@ -100,10 +100,42 @@ export function drawPaper(canvas, view, rect, layout, raster, { sepia, dark, onl
   }
 }
 
+// Find-in-text hits, on the highlight layer: violet (not one of the highlight colours), the current hit
+// stronger and outlined.
+export const FIND_COLORS = { hit: '#d3c2ff', current: '#a98bff', outline: '#6d28d9' };
+
+function drawFinds(ctx, hits, ox, oy, zoom, dark) {
+  const pad = 1;
+  const box = (x, y, w, h) => [ox + x * zoom - pad, oy + y * zoom - pad, w * zoom + 2 * pad, h * zoom + 2 * pad, Math.min(3, 2.5 * zoom)];
+  ctx.save();
+  ctx.globalAlpha = dark ? 0.4 : 1;
+  ctx.fillStyle = FIND_COLORS.hit;
+  for (const [x, y, w, h] of hits.rects) {
+    ctx.beginPath();
+    ctx.roundRect(...box(x, y, w, h));
+    ctx.fill();
+  }
+  if (hits.current) {
+    ctx.globalAlpha = dark ? 0.7 : 1;
+    ctx.fillStyle = FIND_COLORS.current;
+    ctx.strokeStyle = FIND_COLORS.outline;
+    ctx.lineWidth = 1.5;
+    for (const [x, y, w, h] of hits.current) {
+      ctx.beginPath();
+      ctx.roundRect(...box(x, y, w, h));
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 // The highlight layer. Light mode: this canvas is multiplied over the paper
 // (CSS mix-blend-mode), so a pastel colour tints the page and the text stays
 // black. Dark mode: plain translucent colour over the inverted page.
-export function drawMarks(canvas, view, rect, layout, marksByPage, { dark, hidden, selectedId, onlyIndex }) {
+// `finds`: Map(page key -> { rects: [[x, y, w, h]], current: [[x, y, w, h]] | null }) — the hits of the
+// text being searched for (page-local px).
+export function drawMarks(canvas, view, rect, layout, marksByPage, { dark, hidden, selectedId, onlyIndex, finds }) {
   const dpr = window.devicePixelRatio || 1;
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -113,7 +145,8 @@ export function drawMarks(canvas, view, rect, layout, marksByPage, { dark, hidde
 
   for (const i of onlyIndex != null ? [onlyIndex] : visiblePages(layout, view, rect)) {
     const marks = activeMarks(marksByPage.get(layout.pages[i].key));
-    if (!marks.length) continue;
+    const hits = finds?.get(layout.pages[i].key);
+    if (!marks.length && !hits) continue;
     const r = pageRect(layout, i);
     const ox = (r.x + scrollX) * zoom;
     const oy = (r.y + scrollY) * zoom;
@@ -166,5 +199,6 @@ export function drawMarks(canvas, view, rect, layout, marksByPage, { dark, hidde
         ctx.restore();
       }
     }
+    if (hits) drawFinds(ctx, hits, ox, oy, zoom, dark);
   }
 }

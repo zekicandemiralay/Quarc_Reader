@@ -24,6 +24,7 @@ import {
   viewForPosition,
   MAX_ZOOM,
   MIN_ZOOM,
+  INSETS,
 } from './geometry';
 import { bucketElements, signature, sceneFromRows, relayout } from './inkBuckets';
 import { PdfRaster } from './pdfRaster';
@@ -34,6 +35,8 @@ import Toolbar from './Toolbar';
 import PageBar from './PageBar';
 import SelectionBar from './SelectionBar';
 import MarkPopover from './MarkPopover';
+import FindBar from './FindBar';
+import useFind from './useFind';
 
 const HOLD_MS = 500; // keep the pen still this long at a stroke's end to snap it to a shape
 const HOLD_RADIUS = { pen: 6, mouse: 5, touch: 10 }; // screen px of jitter that still counts as "still"
@@ -134,6 +137,9 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const [zoomPct, setZoomPct] = useState(100);
   const [selBar, setSelBar] = useState(null); // { anchor, items } while text is selected
   const [markPop, setMarkPop] = useState(null); // { pageKey, mark, anchor }
+  const [findOpen, setFindOpen] = useState(false); // the find-in-text bar (Ctrl+F)
+  const findHitsRef = useRef(new Map()); // page key -> the hits to draw (see useFind)
+  const findRef = useRef(null);
 
   const apiRef = useRef(null);
   const containerRef = useRef(null);
@@ -183,7 +189,8 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const isDrawTool = activeToolType === 'freedraw' && !textMode;
   const isDrawToolRef = useRef(isDrawTool);
   isDrawToolRef.current = isDrawTool;
-  const textNeeded = textMode || (isDrawTool && tool === 'highlighter' && snapText && !readOnly);
+  // Text layers exist only when something needs the words: selecting, snapping a highlighter, finding.
+  const textNeeded = textMode || (isDrawTool && tool === 'highlighter' && snapText && !readOnly) || findOpen;
 
   // ---------- view (scroll/zoom) + paper ----------
 
@@ -244,7 +251,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     const book = modeRef.current === 'book';
     const onlyIndex = book ? Math.min(bookPageRef.current, L.n - 1) : undefined;
     drawPaper(paperRef.current, view, rect, L, raster, { sepia: p.paper === 'sepia', dark: p.dark, onlyIndex });
-    drawMarks(marksCanvasRef.current, view, rect, L, marksRef.current, { dark: p.dark, hidden: false, selectedId: markPopRef.current?.mark.id, onlyIndex });
+    drawMarks(marksCanvasRef.current, view, rect, L, marksRef.current, { dark: p.dark, hidden: false, selectedId: markPopRef.current?.mark.id, onlyIndex, finds: findHitsRef.current });
     clipInk(book && L.n ? pageRect(L, onlyIndex) : null, view, rect);
     textRef.current?.sync(L, view, rect, visible, { enabled: textNeededRef.current, interactive: textModeRef.current });
 
@@ -377,6 +384,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     const raster = new PdfRaster(pdf, { onUpdate: scheduleSyncPaper });
     rasterRef.current = raster;
     const text = new TextLayerManager(textRootRef.current, pdf);
+    text.onRendered = (i) => findRef.current?.onPageRendered(i);
     textRef.current = text;
     scheduleSyncPaper();
     return () => {
@@ -1074,6 +1082,54 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     return true;
   }
 
+  // ---------- find in text (Ctrl+F) ----------
+
+  // Brings page li on screen unless (part of) it already is.
+  function ensurePage(li) {
+    if (modeRef.current === 'book') {
+      if (bookPageRef.current !== li) goToPage(li, { keepZoom: true });
+      return;
+    }
+    const v = currentView();
+    if (!v || !visiblePages(layoutRef.current, v, sizeRef.current).includes(li)) goToPage(li);
+  }
+
+  // Scrolls (without changing the zoom) so a rectangle of page li — [x, y, w, h], page-local px — is in the
+  // clear part of the screen, between the find bar and the page bar; nothing moves if it already is.
+  function revealRect(li, [x, y, w, h]) {
+    stopInitialView();
+    const v = currentView();
+    const rect = sizeRef.current;
+    if (!v || !rect.width) return;
+    const r = pageRect(layoutRef.current, li);
+    const left = (r.x + x + v.scrollX) * v.zoom;
+    const top = (r.y + y + v.scrollY) * v.zoom;
+    const right = left + w * v.zoom;
+    const bottom = top + h * v.zoom;
+    const air = 12;
+    const fitsX = left >= INSETS.side + air && right <= rect.width - INSETS.side - air;
+    const fitsY = top >= INSETS.top + air && bottom <= rect.height - INSETS.bottom - air;
+    if (fitsX && fitsY) return;
+    const midY = (INSETS.top + rect.height - INSETS.bottom) / 2;
+    const scrollY = fitsY ? v.scrollY : midY / v.zoom - (r.y + y + h / 2);
+    const scrollX = fitsX ? v.scrollX : rect.width / 2 / v.zoom - (r.x + x + w / 2);
+    applyView({ zoom: v.zoom, ...clampView(scrollX, scrollY, v.zoom) });
+  }
+
+  const find = useFind({
+    pdf,
+    layoutRef,
+    textRef,
+    open: findOpen,
+    setOpen: setFindOpen,
+    hitsRef: findHitsRef,
+    currentLayoutIndex: () => (modeRef.current === 'book' ? bookPageRef.current : currentIndexRef.current),
+    ensurePage,
+    revealRect,
+    redraw: scheduleSyncPaper,
+  });
+  findRef.current = find;
+
   // One screen further down, with a little overlap so the eye keeps its place.
   function scrollByScreen(dir) {
     stopInitialView();
@@ -1622,6 +1678,29 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Find in text: Ctrl+F / Cmd+F opens the bar — before the browser's own find, and before Excalidraw's canvas
+  // search, which this replaces — F3 / Ctrl+G go to the next hit (Shift: the previous), Esc closes the bar.
+  useEffect(() => {
+    const onKey = (e) => {
+      const f = findRef.current;
+      if (!f || !e.key) return;
+      if (document.querySelector('div[class*="z-[1100]"] [role=dialog]')) return; // a dialog has the floor
+      const key = e.key.toLowerCase();
+      const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+      let handled = true;
+      if (mod && key === 'f') f.openFind();
+      else if (f.isOpen && (key === 'f3' || (mod && key === 'g'))) (e.shiftKey ? f.prev : f.next)();
+      else if (f.isOpen && key === 'escape') f.closeFind();
+      else handled = false;
+      if (handled) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
   // ---------- MS-Paint-style cut selection ----------
 
   useEffect(() => {
@@ -1750,6 +1829,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     undo,
     redo,
     fit: () => toggleFit(sizeRef.current.height / 2 + (containerRef.current?.getBoundingClientRect().top || 0)),
+    openFind: () => findRef.current?.openFind(),
     marks: () => marksRef.current,
     // Another device changed these pages: merge them in, stroke by stroke.
     applyRemote(rows) {
@@ -1806,7 +1886,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const inkFilter = dark ? DARK_INK_FILTER : undefined;
   const desk = dark ? DESK.dark : paper === 'sepia' ? DESK.sepia : DESK.white;
   const n = layout.n;
-  const showToolbar = !readOnly && chrome;
+  const showToolbar = !readOnly && chrome && !findOpen; // the find bar takes the dock's place while it is open
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1898,6 +1978,8 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
             onCut={chooseCut}
           />
         )}
+
+        {findOpen && <FindBar find={find} />}
 
         {selBar && textMode && (
           <SelectionBar

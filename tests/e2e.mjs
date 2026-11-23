@@ -47,6 +47,7 @@ async function main() {
       ['reading', scenarioReading],
       ['style', scenarioStyle],
       ['openwith', scenarioOpenWith],
+      ['find', scenarioFind],
       ['pen', scenarioPen],
       ['tools', scenarioTools],
       ['library', scenarioLibrary],
@@ -1146,6 +1147,214 @@ async function scenarioOpenWith(browser, state) {
     check('the shared PDF opens', (await titles(page)).join() === 'Moby Dick (test),The Whale (test)');
     check('no page errors', errors.length === 0, errors.join('\n'));
     await ctx.close();
+  }
+}
+
+// ---- Find in text (Ctrl+F) ----------------------------------------------------------------------------------
+
+async function scenarioFind(browser, state) {
+  section('Find in text (Ctrl+F)');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  const ctrl = async (key) => {
+    await page.keyboard.down('Control');
+    await page.keyboard.press(key);
+    await page.keyboard.up('Control');
+  };
+  const countText = () => page.$eval('[data-testid="find-count"]', (el) => el.innerText).catch(() => null);
+  const waitCount = (want, timeout = 20000) => waitUntil(async () => (await countText()) === want, { timeout, label: `the find count to read "${want}"` });
+  const pageNo = async () => parseInt((await page.$eval('[data-testid="page-counter"]', (el) => el.innerText)).split('/')[0], 10);
+  // Pixels of the find colours on the highlight canvas: [all hits, the current hit].
+  const hitPixels = () =>
+    page.evaluate(() => {
+      const c = [...document.querySelectorAll('.quarc-canvas-page canvas')].find((x) => x.style.mixBlendMode === 'multiply');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      const near = (i, [r, g, b]) => Math.abs(d[i] - r) < 5 && Math.abs(d[i + 1] - g) < 5 && Math.abs(d[i + 2] - b) < 5 && d[i + 3] > 250;
+      let hit = 0;
+      let current = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (near(i, [211, 194, 255])) hit++;
+        else if (near(i, [169, 139, 255])) current++;
+      }
+      return [hit, current];
+    });
+  const inputFocused = () => page.evaluate(() => document.activeElement?.getAttribute('data-testid') === 'find-input');
+  // Where the current hit is on screen: its bounding box on the highlight canvas, and how tall the canvas is.
+  const currentBox = () =>
+    page.evaluate(() => {
+      const c = [...document.querySelectorAll('.quarc-canvas-page canvas')].find((x) => x.style.mixBlendMode === 'multiply');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let top = Infinity;
+      let bottom = -1;
+      for (let y = 0; y < c.height; y++) {
+        for (let x = 0; x < c.width; x++) {
+          const i = (y * c.width + x) * 4;
+          if (Math.abs(d[i] - 169) < 5 && Math.abs(d[i + 1] - 139) < 5 && Math.abs(d[i + 2] - 255) < 5 && d[i + 3] > 250) {
+            top = Math.min(top, y);
+            bottom = Math.max(bottom, y);
+          }
+        }
+      }
+      return { top, bottom, height: c.height };
+    });
+
+  await login(page, 'hana');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+
+  await ctrl('KeyF');
+  await page.waitForSelector('[data-testid="find-bar"]', { timeout: 5000 });
+  check('Ctrl+F opens the find bar with the cursor in it', await inputFocused());
+  check('...where the tool dock was', !(await page.$('[data-testid="tool-pen"]')));
+  check('...and Excalidraw\'s own search did not open', !(await page.$('.excalidraw .sidebar, .excalidraw .search-input')));
+
+  await page.keyboard.type('ishmael');
+  await waitCount('1 of 3');
+  check('typing finds every hit in the book: "ishmael" is on 3 pages', true);
+  await waitUntil(async () => (await hitPixels())[1] > 100, { label: 'the current hit to be drawn' });
+  check('the current hit is drawn on the page', true);
+  await shot(page, '95-find');
+
+  await page.keyboard.press('Enter');
+  await waitCount('2 of 3');
+  await waitUntil(async () => (await pageNo()) === 2, { label: 'page 2' });
+  check('Enter goes to the next hit, on the next page', true);
+  await waitUntil(async () => (await hitPixels())[1] > 100, { label: 'the hit on page 2 to be drawn' });
+  const box = await currentBox();
+  check('...and it is on screen, clear of the find bar and the page bar', box.top >= 76 && box.bottom <= box.height - 72, JSON.stringify(box));
+
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Shift');
+  await waitCount('1 of 3');
+  await page.keyboard.down('Shift');
+  await page.keyboard.press('Enter');
+  await page.keyboard.up('Shift');
+  await waitCount('3 of 3');
+  await waitUntil(async () => (await pageNo()) === 3, { label: 'page 3' });
+  check('Shift+Enter goes back, and wraps round the book', true);
+  await page.keyboard.press('F3');
+  await waitCount('1 of 3');
+  check('F3 is "next" too, and wraps', true);
+
+  // The same word in capitals, and a phrase over a line break.
+  await ctrl('KeyF');
+  check('Ctrl+F again selects the text in the box', await page.evaluate(() => { const i = document.activeElement; return i?.selectionStart === 0 && i?.selectionEnd === i?.value.length && i.value.length > 0; }));
+  await page.keyboard.type('ISHMAEL');
+  await waitUntil(async () => /of 3$/.test((await countText()) || ''), { label: 'the count for ISHMAEL' });
+  check('case does not matter', true);
+  await ctrl('KeyF');
+  await page.keyboard.type('particular to interest');
+  await waitUntil(async () => /of 3$/.test((await countText()) || ''), { label: 'the count over a line break' });
+  check('a phrase that runs over a line break is found', true);
+
+  // Accents: the toggle is there, remembered, and does not break plain words.
+  await page.click('[data-testid="find-accents"]');
+  check('the accent switch is remembered in the settings', await waitUntil(async () => (await page.evaluate(() => JSON.parse(localStorage.getItem('quarc_reader_settings')).findAccents)) === true, { label: 'findAccents' }).then(() => true));
+  await ctrl('KeyF');
+  await page.keyboard.type('chapter');
+  await waitUntil(async () => /of 3$/.test((await countText()) || ''), { label: 'the count with accents on' });
+  check('plain words are found with accents on, too', true);
+  await page.click('[data-testid="find-accents"]');
+
+  // Nothing found.
+  await ctrl('KeyF');
+  await page.keyboard.type('zzzzzz');
+  await waitUntil(async () => (await countText()) === 'No matches', { label: 'No matches' });
+  await sleep(300);
+  const [hits, current] = await hitPixels();
+  check('a word that is not there says so and draws nothing', hits === 0 && current === 0, `${hits}/${current} px`);
+
+  // Escape: gone, the dock is back, the hits are off the page.
+  await ctrl('KeyF');
+  await page.keyboard.type('ishmael');
+  await waitCount('1 of 3');
+  await page.keyboard.press('Escape');
+  await waitUntil(async () => !(await page.$('[data-testid="find-bar"]')), { label: 'the bar to close' });
+  await waitUntil(async () => (await hitPixels()).every((n) => n === 0), { label: 'the hits to leave the page' });
+  check('Escape closes the bar and takes the hits off the page', true);
+  check('...and the tool dock is back', !!(await page.$('[data-testid="tool-pen"]')));
+
+  // The button in the bar, and the last word is still there.
+  await page.click('button[aria-label="Find in document"]');
+  await page.waitForSelector('[data-testid="find-bar"]');
+  check('the search button opens it too, with the last search still in the box', (await page.$eval('[data-testid="find-input"]', (el) => el.value)) === 'ishmael');
+  await waitCount('1 of 3');
+  await page.click('[data-testid="find-close"]');
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+
+  // ----- book mode: one page at a time -----
+  {
+    const ctx2 = await browser.createBrowserContext();
+    const p2 = await ctx2.newPage();
+    await lightMode(p2, { defaults: false });
+    await testDefaults(p2, { readMode: 'book' });
+    const errors2 = [];
+    p2.on('pageerror', (e) => errors2.push(e.message));
+    await login(p2, 'ian');
+    await chooseOnImport(p2, state.pdfPath, 'device only');
+    await readerReady(p2);
+    await p2.keyboard.down('Control');
+    await p2.keyboard.press('KeyF');
+    await p2.keyboard.up('Control');
+    await p2.keyboard.type('chapter 3');
+    await p2.waitForFunction(() => document.querySelector('[data-testid="find-count"]')?.innerText === '1 of 1', { timeout: 20000 });
+    await waitUntil(async () => parseInt((await p2.$eval('[data-testid="page-counter"]', (el) => el.innerText)).split('/')[0], 10) === 3, { label: 'book mode to turn to page 3' });
+    check('in book mode a hit turns to its page', true);
+    const zoomBook = await p2.$eval('[data-testid="zoom-level"]', (el) => parseInt(el.textContent, 10));
+    check('...and the page is shown whole, as in a book', zoomBook < 120, `${zoomBook}%`);
+    await shot(p2, '96-find-book');
+    check('no page errors (book mode)', errors2.length === 0, errors2.join('\n'));
+    await ctx2.close();
+  }
+
+  // ----- a long book: far hits, counted in the background -----
+  {
+    const long = writePdf('find-300.pdf', await makeTestPdf({ pages: 300, title: 'Long Book (test)' }));
+    const ctx3 = await browser.createBrowserContext();
+    const p3 = await ctx3.newPage();
+    await lightMode(p3);
+    const errors3 = [];
+    p3.on('pageerror', (e) => errors3.push(e.message));
+    await login(p3, 'jules');
+    await chooseOnImport(p3, long, 'device only');
+    await readerReady(p3);
+    await p3.keyboard.down('Control');
+    await p3.keyboard.press('KeyF');
+    await p3.keyboard.up('Control');
+    const t0 = Date.now();
+    await p3.keyboard.type('chapter 250');
+    await p3.waitForFunction(() => document.querySelector('[data-testid="find-count"]')?.innerText === '1 of 1', { timeout: 40000 });
+    const took = Date.now() - t0;
+    await waitUntil(async () => parseInt((await p3.$eval('[data-testid="page-counter"]', (el) => el.innerText)).split('/')[0], 10) === 250, { label: 'the view to reach page 250' });
+    check('a hit 250 pages away is found and shown', true, `${took} ms`);
+    await waitUntil(
+      async () =>
+        p3.evaluate(() => {
+          const c = [...document.querySelectorAll('.quarc-canvas-page canvas')].find((x) => x.style.mixBlendMode === 'multiply');
+          const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+          for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 169) < 5 && Math.abs(d[i + 1] - 139) < 5 && Math.abs(d[i + 2] - 255) < 5 && d[i + 3] > 250) return true;
+          return false;
+        }),
+      { label: 'the far hit to be drawn', timeout: 15000 }
+    );
+    check('...and drawn where it is', true);
+    check('searching all 300 pages takes a few seconds, not minutes', took < 30000, `${took} ms`);
+    await shot(p3, '97-find-far');
+    // Every page has "ishmael": the whole count comes in while reading.
+    await p3.keyboard.down('Control');
+    await p3.keyboard.press('KeyF');
+    await p3.keyboard.up('Control');
+    await p3.keyboard.type('ishmael');
+    await p3.waitForFunction(() => /of 300$/.test(document.querySelector('[data-testid="find-count"]')?.innerText || ''), { timeout: 40000 });
+    check('a word on every page is counted: 300 hits', true);
+    check('no page errors (long book)', errors3.length === 0, errors3.join('\n'));
+    await ctx3.close();
   }
 }
 

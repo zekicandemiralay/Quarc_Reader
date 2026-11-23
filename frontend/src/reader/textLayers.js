@@ -1,6 +1,7 @@
 import { pdfjs } from '../lib/pdf';
 import { PX_PER_PT, pageRect } from './geometry';
 import { mergeLineRects } from './marks';
+import { fold, joinItems, findAll, matchSegments, MAX_MATCHES } from './findText';
 
 // The selectable text of PDF pages, as invisible DOM text laid over the page.
 //
@@ -38,6 +39,7 @@ export class TextLayerManager {
     this.pages = new Map(); // pageIndex -> { wrapper, container, key, w, h, ready }
     this.interactive = false;
     this.disposed = false;
+    this.onRendered = null; // (layoutIndex) => void, when a page's text has been laid out
   }
 
   // Create/destroy layers for the visible pages and move them with the view.
@@ -83,6 +85,9 @@ export class TextLayerManager {
         const viewport = pdfPage.getViewport({ scale: PX_PER_PT });
         const layer = new pdfjs.TextLayer({ textContentSource: pdfPage.streamTextContent(), container, viewport });
         await layer.render();
+        if (this.disposed || this.pages.get(i) !== entry) return;
+        entry.layer = layer;
+        this.onRendered?.(i);
       } catch {
         /* a page with no text, or one destroyed while rendering */
       }
@@ -98,6 +103,38 @@ export class TextLayerManager {
 
   zoomOf(p) {
     return p.wrapper.getBoundingClientRect().width / p.w || 1;
+  }
+
+  // Whether this page's text has been laid out (find-in-text needs that to know where a hit is).
+  hasText(i) {
+    return !!this.pages.get(i)?.layer;
+  }
+
+  // Every hit of `needle` (already folded, see findText.fold) on page i, as page-local rectangles —
+  // one [x, y, w, h] per line the hit touches — in reading order. The text is rebuilt from the layer's own
+  // spans, so a hit is found exactly where the layer has it. null while the page has no laid-out text.
+  findRects(i, needle, accents) {
+    const p = this.pages.get(i);
+    const layer = p?.layer;
+    if (!layer || !needle) return null;
+    const divs = layer.textDivs;
+    // a <br> after a span is the end of a line (pdf.js puts one after the last span of each)
+    const page = joinItems(layer.textContentItemsStr.map((str, k) => ({ str, hasEOL: divs[k]?.nextElementSibling?.tagName === 'BR' })));
+    const { text, map } = fold(page.joined, { accents });
+    const wr = p.wrapper.getBoundingClientRect();
+    const zoom = wr.width / p.w || 1;
+    const range = document.createRange();
+    return findAll(text, needle, MAX_MATCHES).map((a) => {
+      const rects = [];
+      for (const { item, from, to } of matchSegments(page, map, a, a + needle.length)) {
+        const node = divs[item]?.firstChild;
+        if (!node || node.nodeType !== Node.TEXT_NODE) continue;
+        range.setStart(node, from);
+        range.setEnd(node, to);
+        for (const cr of range.getClientRects()) rects.push({ x: (cr.left - wr.left) / zoom, y: (cr.top - wr.top) / zoom, w: cr.width / zoom, h: cr.height / zoom });
+      }
+      return mergeLineRects(rects);
+    });
   }
 
   // The current text selection as one entry per page it touches:

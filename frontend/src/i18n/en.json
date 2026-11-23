@@ -256,6 +256,18 @@
     "unavailable": "This link was not found, has expired or was turned off.",
     "openApp": "Open Quarc Reader"
   },
+  "find": {
+    "title": "Find in document",
+    "placeholder": "Find in document",
+    "count": "{{current}} of {{total}}",
+    "searching": "Searching…",
+    "noMatches": "No matches",
+    "noText": "No text to search",
+    "noTextHint": "This PDF has no text to search (it may be a scan).",
+    "prev": "Previous match",
+    "next": "Next match",
+    "accents": "Match accents (é ≠ e)"
+  },
   "export": {
     "title": "Save PDF",
     "explain": "Your highlights, notes and drawings stay editable in Quarc. Saving makes an ordinary PDF with them in it — ink as sharp vector lines, highlights as real PDF highlights — that opens anywhere.",

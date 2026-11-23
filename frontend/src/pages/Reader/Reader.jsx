@@ -21,6 +21,7 @@ import {
   FileDown,
   CloudOff,
   Quote,
+  Search,
 } from 'lucide-react';
 import { db } from '../../lib/db';
 import { on } from '../../lib/events';
@@ -312,6 +313,9 @@ function Reader({ id }) {
               </span>
             </p>
           </div>
+          <IconButton title={t('find.title')} onClick={() => canvasRef.current?.openFind()}>
+            <Search size={20} />
+          </IconButton>
           <IconButton title={hereBookmark ? t('reader.removeBookmark') : t('reader.addBookmark')} onClick={toggleBookmark} active={!!hereBookmark}>
             {hereBookmark ? <BookmarkCheck size={20} /> : <Bookmark size={20} />}
           </IconButton>
