@@ -7,6 +7,7 @@ import { openPdf } from '../../lib/pdf';
 import { getClientId } from '../../lib/sync';
 import useAuthStore from '../../store/authStore';
 import useSettings, { resolvePaper } from '../../store/settingsStore';
+import useKeepAwake from '../../lib/useKeepAwake';
 import ReaderCanvas from '../../reader/ReaderCanvas';
 import { buildPages } from '../../reader/geometry';
 import { toast } from '../../components/Toasts';
@@ -26,6 +27,8 @@ export default function SharedView() {
   // and the button in the bar switches it for this visit only.
   const [mode, setMode] = useState(readMode === 'book' ? 'book' : 'scroll');
   const [state, setState] = useState({ phase: 'loading' });
+  const keepAwakeSetting = useSettings((s) => s.keepAwake);
+  useKeepAwake(keepAwakeSetting && state.phase === 'ready'); // reading a shared document too
   const [pdf, setPdf] = useState(null);
   const [adding, setAdding] = useState(false);
   const canvasRef = useRef(null);

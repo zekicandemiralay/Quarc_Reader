@@ -69,6 +69,16 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   DOM offsets. Ctrl+F is caught on `window` in the capture phase (`stopImmediatePropagation`) — Excalidraw 0.18 has its own
   Ctrl+F canvas search that would otherwise open. Not done: words hyphenated over a line break, whole-word / regex, searching
   the whole library, turning a hit into a highlight. A synced document that was never downloaded is read in full by a search.
+- **Screen stays on while reading** (`lib/keepAwake.js`, `lib/useKeepAwake.js`, `KeepAwakePlugin.java`; Settings → Reading → `keepAwake`,
+  on by default): held while a document is open (Reader and shared view), not in the library, counted so several callers share
+  one lock. Android uses the window flag `FLAG_KEEP_SCREEN_ON` through the plugin (the web API is not reliable in a WebView; a
+  build without the plugin falls back to it); everywhere else the Screen Wake Lock API, which the browser drops when the page is
+  hidden — it is requested again on `visibilitychange`, and the lock's `released` flag is checked as well as its `release` event.
+- **Why a document would not open** (`lib/pdfError.js`, the Reader's error screen): pdf.js errors are classified — `signin`
+  (401/403), `gone` (404), `server` (5xx), `network` (status 0), `offline`, `invalid`, `invalid-local`, `password` — each with its
+  own message, the technical detail shown under it and `console.error`ed. A damaged *local* copy of a synced document is dropped
+  automatically and the server's copy is opened; `cacheOffline` keeps a download only when its size (and, up to 150 MB, its
+  SHA-256) matches the document's, so a cut-short download or an error page can never be stored as "the file".
 - **Dock: eraser and colours** (`reader/Toolbar.jsx`, `ColorPanel.jsx`, `ColorPicker.jsx`, `lib/color.js`): the eraser is a dock
   button (Excalidraw's own eraser tool; pressing it again goes back to the pen/highlighter in `settings.tool`) and is not in the
   Tools flyout any more. The preset swatches stay inline in the dock (tests click `button[aria-label="#e03131"]`); the last circle
@@ -111,6 +121,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 - This folder is synced by **Proton Drive**: when a write races its sync it can leave `File (# Name clash <date> <id> #).ext`
   next to the real file and an edit can seem to vanish. After a batch of edits that "succeeded" but is not there, look for such a
   file, diff it against the real one, re-apply, delete it — and never `git add -A` with one present (it is not gitignored).
+- Proton Drive can also rename a *build folder* mid-build: `frontend/dist/assets` became `assets (# Name clash … #)` and the
+  test app then 404'd its main script (blank page, "no Username input"). Rebuild and check `ls frontend/dist/assets` before running the
+  browser tests.
 - Browser tests: the toasts stack at the bottom centre, *outside* the reader container, and swallow clicks there (a snip test
   clicked "on the page" and hit a toast). Click somewhere clear.
 
@@ -152,9 +165,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 135 unit tests (geometry, ink, marks, export, find, snip, colour, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 152 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find dock snip pen tools library big   (262 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find errors awake dock snip pen tools library big   (280 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 

@@ -30,9 +30,10 @@ const only = process.argv[2]; // optional: run a single scenario by name
 
 async function main() {
   console.log(`output: ${OUT}`);
-  await startStack();
+  const stack = await startStack();
   const browser = await launch();
   const state = {
+    dataDir: stack.data, // the backend's data folder (the uploaded PDFs are in files/<user>/<sha256>)
     pdfPath: writePdf('test.pdf', await makeTestPdf()),
     bigPdfPath: writePdf('test-big.pdf', await makeTestPdf({ junkBytes: 6 * 1024 * 1024 })),
   };
@@ -48,6 +49,8 @@ async function main() {
       ['style', scenarioStyle],
       ['openwith', scenarioOpenWith],
       ['find', scenarioFind],
+      ['errors', scenarioErrors],
+      ['awake', scenarioAwake],
       ['dock', scenarioDock],
       ['snip', scenarioSnip],
       ['pen', scenarioPen],
@@ -1358,6 +1361,203 @@ async function scenarioFind(browser, state) {
     check('no page errors (long book)', errors3.length === 0, errors3.join('\n'));
     await ctx3.close();
   }
+}
+
+// ---- The screen stays on while a document is open ---------------------------------------------------------------
+
+async function scenarioAwake(browser, state) {
+  section('The screen is kept on while reading');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  // A stand-in for the Screen Wake Lock API that records what the app asks for.
+  await page.evaluateOnNewDocument(() => {
+    window.__wl = { log: [], held: 0, drop: () => {} };
+    Object.defineProperty(navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: async (type) => {
+          window.__wl.log.push(`request ${type}`);
+          window.__wl.held++;
+          const handlers = [];
+          const lock = {
+            released: false,
+            addEventListener: (_t, fn) => handlers.push(fn),
+            release: async () => {
+              if (lock.released) return;
+              lock.released = true;
+              window.__wl.held--;
+              window.__wl.log.push('release');
+            },
+          };
+          // what a browser does to the lock of a page that has been hidden
+          window.__wl.drop = () => {
+            if (lock.released) return;
+            lock.released = true;
+            window.__wl.held--;
+            handlers.forEach((h) => h());
+          };
+          return lock;
+        },
+      },
+    });
+  });
+  const wl = () => page.evaluate(() => window.__wl);
+  const setSwitch = async (on) => {
+    await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle0' });
+    const sw = await page.evaluateHandle(() => [...document.querySelectorAll('p')].find((p) => p.textContent === 'Keep the screen on while reading').parentElement.parentElement.querySelector('[role=switch]'));
+    if (((await sw.evaluate((el) => el.getAttribute('aria-checked'))) === 'true') !== on) await sw.click();
+    return (await sw.evaluate((el) => el.getAttribute('aria-checked'))) === (on ? 'true' : 'false');
+  };
+
+  await login(page, 'wanda');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  await waitUntil(async () => (await wl()).held === 1, { label: 'the screen lock while reading' });
+  check('opening a document asks for the screen to be kept on', (await wl()).log[0] === 'request screen');
+
+  await page.click('button[aria-label="Back to library"]');
+  await page.waitForFunction(() => location.pathname === '/', { timeout: 10000 });
+  await waitUntil(async () => (await wl()).held === 0, { label: 'the screen lock to be let go' });
+  check('leaving the document lets the screen go', true);
+
+  await page.evaluate(() => (window.__wl.log.length = 0));
+  await sleep(500);
+  check('the library alone does not keep the screen on', (await wl()).held === 0 && (await wl()).log.length === 0);
+
+  // hidden and shown again: the browser drops its lock when the page is hidden, the app asks again when it is shown
+  await page.evaluate(() => document.querySelector('.cursor-pointer')?.click());
+  await readerReady(page);
+  await waitUntil(async () => (await wl()).held === 1, { label: 'the lock again' });
+  await page.evaluate(() => {
+    window.__hidden = true;
+    window.__wl.drop(); // the browser lets the lock of a hidden page go
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (window.__hidden ? 'hidden' : 'visible') });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await sleep(300);
+  const hiddenLog = (await wl()).log.filter((l) => l === 'request screen').length;
+  await page.evaluate(() => {
+    window.__hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await sleep(500);
+  check('nothing is asked for while the page is hidden', hiddenLog === 1, `${hiddenLog} requests`);
+  check('...and when the page is shown again the screen is kept on again', (await wl()).log.filter((l) => l === 'request screen').length === 2);
+
+  // the setting
+  check('Settings has a switch for it, on by default', await setSwitch(true));
+  check('switched off in Settings', await setSwitch(false));
+  await page.evaluate(() => (window.__wl.log.length = 0));
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
+  await page.evaluate(() => document.querySelector('.cursor-pointer')?.click());
+  await readerReady(page);
+  await sleep(600);
+  check('with the switch off, an open document does not ask for it', (await wl()).held === 0 && !(await wl()).log.includes('request screen'));
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// ---- When a synced document will not open: say why, and mend what can be mended ---------------------------------
+
+async function scenarioErrors(browser, state) {
+  section('A synced document that will not open: the reason is told, not just "could not be opened"');
+  const { readdirSync, rmSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  await testDefaults(page, { autoCache: false }); // a second device that keeps no copy of its own
+  await page.setCacheEnabled(false); // the server's answers must really be asked for, not remembered by the browser
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const message = () => page.$eval('[data-testid="reader-error"]', (el) => el.innerText).catch(() => '');
+  const detail = () => page.$eval('[data-testid="reader-error-detail"]', (el) => el.innerText).catch(() => '');
+  const open = async (id) => page.goto(`${BASE}/read/${id}`, { waitUntil: 'networkidle0' });
+  // A second device: the file is on the server, not in this browser.
+  const dropLocalCopy = () =>
+    page.evaluate(
+      () =>
+        new Promise((resolve, reject) => {
+          const r = indexedDB.open('quarc-reader');
+          r.onerror = () => reject(r.error);
+          r.onsuccess = () => {
+            const db = r.result;
+            const tx = db.transaction('blobs', 'readwrite');
+            tx.objectStore('blobs').clear();
+            tx.oncomplete = () => {
+              db.close();
+              resolve();
+            };
+          };
+        })
+    );
+
+  await login(page, 'olga');
+  await chooseOnImport(page, state.pdfPath, 'Sync with my server');
+  await readerReady(page);
+  const doc = await waitUntil(async () => {
+    const p = await serverPull(page);
+    return p.docs?.length === 1 && p.docs[0].file_ready ? p.docs[0] : null;
+  }, { timeout: 30000, label: 'the file to reach the server' });
+  await dropLocalCopy();
+
+  // ----- the healthy case first: read from the server -----
+  await open(doc.id);
+  await readerReady(page);
+  check('read from the server (this device has no copy), the document opens', ((await dumpDb(page)).blobs || []).length === 0);
+
+  // ----- the sign-in has expired (the cookie is gone, the library still shows) -----
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
+  await page.deleteCookie(...(await page.cookies()));
+  await page.waitForSelector('.cursor-pointer', { timeout: 10000 });
+  await page.evaluate(() => document.querySelector('.cursor-pointer')?.click());
+  await waitUntil(async () => /sign-in has expired/.test(await message()), { timeout: 20000, label: 'the sign-in message' });
+  check('an expired sign-in says so (not "could not be opened as a PDF")', /Sign in again to read it/.test(await message()), await message());
+  check('...with what the server answered, for the record', /HTTP 401/.test(await detail()), await detail());
+  await shot(page, '100-error-signin');
+  await page.click('[data-testid="reader-signin"]');
+  await page.waitForFunction(() => location.pathname === '/login', { timeout: 10000 });
+  check('"Sign in again" goes to the sign-in page', true);
+  await login(page, 'olga');
+
+  // ----- a damaged copy on this device -----
+  await page.evaluate(
+    (sha) =>
+      new Promise((resolve, reject) => {
+        const r = indexedDB.open('quarc-reader');
+        r.onerror = () => reject(r.error);
+        r.onsuccess = () => {
+          const db = r.result;
+          const tx = db.transaction('blobs', 'readwrite');
+          const junk = new Blob(['<html>this is not a PDF</html>'], { type: 'application/pdf' });
+          tx.objectStore('blobs').put({ sha256: sha, blob: junk, size: junk.size, last_used: Date.now() });
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+        };
+      }),
+    doc.file_sha256
+  );
+  check('a damaged copy is on this device (an error page that was saved as the PDF)', ((await dumpDb(page)).blobs || []).length === 1);
+  await open(doc.id);
+  await readerReady(page);
+  check('...and is dropped by itself: the document opens from the server', ((await dumpDb(page)).blobs || []).length === 0 && !(await page.$('[data-testid="reader-error"]')));
+
+  // ----- the server no longer has the file -----
+  for (const user of readdirSync(join(state.dataDir, 'files'))) rmSync(join(state.dataDir, 'files', user, doc.file_sha256), { force: true });
+  await open(doc.id);
+  await waitUntil(async () => /does not have this file/.test(await message()), { timeout: 20000, label: 'the missing-file message' });
+  check('a file the server does not have says so', /does not have this file/.test(await message()), await message());
+  check('...and offers to try again', await page.$$eval('button', (els) => els.some((b) => b.innerText.trim() === 'Try again')));
+  await shot(page, '102-error-gone');
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
 }
 
 // ---- The dock: the eraser, colours, the colour history and the picker -----------------------------------------

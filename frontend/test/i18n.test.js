@@ -39,7 +39,7 @@ const DYNAMIC = {
   'library.filter.': ['all', 'reading', 'favorites', 'local', 'trash'],
   'library.importError.': ['password', 'invalid'],
   'library.sortBy.': ['recent', 'title', 'added'],
-  'reader.error.': ['missing', 'not-ready', 'offline', 'password', 'invalid'],
+  'reader.error.': ['missing', 'not-ready', 'offline', 'password', 'invalid', 'invalid-local', 'signin', 'gone', 'server', 'network', 'unknown'],
   'reader.tool.': ['select', 'hand', 'rectangle', 'diamond', 'ellipse', 'arrow', 'line', 'text', 'image', 'eraser', 'cutRect', 'cutFree'],
   'readingStyle.': ['scroll.title', 'scroll.body', 'book.title', 'book.body'],
   'settings.platform.': ['android', 'desktop', 'web'],

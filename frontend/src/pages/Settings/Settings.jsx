@@ -154,6 +154,9 @@ export default function Settings() {
           <Row label={t('reader.pageTurn')} hint={t('settings.pageTurnHint')}>
             <Segmented value={s.pageTurn} onChange={(v) => s.update({ pageTurn: v })} options={[['swipe', t('reader.turnSwipe')], ['tap', t('reader.turnTap')], ['both', t('reader.turnBoth')]]} />
           </Row>
+          <Row label={t('settings.keepAwake')} hint={t('settings.keepAwakeHint')}>
+            <Toggle checked={s.keepAwake} onChange={(v) => s.update({ keepAwake: v })} />
+          </Row>
         </Section>
 
         <Section title={t('settings.library')}>

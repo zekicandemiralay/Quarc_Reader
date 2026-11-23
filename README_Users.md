@@ -111,6 +111,14 @@ their own copy.
 
 ## Good to know
 
+- **The screen stays on while you read.** While a document is open the screen does not dim or lock by itself (it is a reading
+  app). It dims as usual in the library and elsewhere. Turn it off in **Settings → Reading → Keep the screen on while reading**
+  if you would rather save the battery. (On Android this needs the new app version; the web app and the desktop app do it
+  wherever the browser supports it.)
+- **A document that will not open says why.** *Your sign-in has expired* — sign in again. *The server does not have this file* — it
+  may still be uploading from your other device. *The server could not be reached* — check that Tailscale is connected. The
+  small "Details" line under the message is what to send along if you ask for help.
+
 - A document kept on one device only is only on that device: back it up, and note that clearing the app's data deletes it.
   Settings → *Clear data on this device* warns you how many such documents you have.
 - Password-protected PDFs are not supported yet.

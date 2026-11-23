@@ -26,7 +26,9 @@ import {
 import { db } from '../../lib/db';
 import { on } from '../../lib/events';
 import { openPdf } from '../../lib/pdf';
-import { pdfSource, loadAnnotations, savePageAnnotations, updateDoc, saveProgress, markOpened, cacheOffline } from '../../lib/library';
+import { describeOpenError } from '../../lib/pdfError';
+import useKeepAwake from '../../lib/useKeepAwake';
+import { pdfSource, loadAnnotations, savePageAnnotations, updateDoc, saveProgress, markOpened, cacheOffline, removeOfflineCopy } from '../../lib/library';
 import { useSyncStatus } from '../../lib/sync';
 import useAuthStore from '../../store/authStore';
 import useSettings, { resolvePaper } from '../../store/settingsStore';
@@ -41,6 +43,8 @@ import SyncModeDialog from '../../components/SyncModeDialog';
 import ReadingStyleDialog from '../../components/ReadingStyleDialog';
 
 const PROGRESS_DELAY_MS = 2500;
+// Errors where trying again can help (the server may be back, the upload may have finished).
+const RETRYABLE = ['offline', 'not-ready', 'network', 'server', 'gone', 'unknown'];
 
 // One reader per document: opening another document starts from scratch (a fresh "how do you want to read?").
 export default function ReaderRoute() {
@@ -60,6 +64,9 @@ function Reader({ id }) {
 
   const doc = useLiveQuery(async () => (await db.docs.get(id)) ?? null, [id]);
   const [status, setStatus] = useState({ phase: 'loading' }); // loading | ready | error
+  // Reading can mean minutes on one page: the screen must not dim or lock meanwhile (Settings → Reading).
+  const keepAwakeSetting = useSettings((s) => s.keepAwake);
+  useKeepAwake(keepAwakeSetting && status.phase === 'ready');
   const [pdf, setPdf] = useState(null);
   const [annotations, setAnnotations] = useState(null);
   const [startPos, setStartPos] = useState(null);
@@ -90,7 +97,7 @@ function Reader({ id }) {
     let opened = null;
     setStatus({ phase: 'loading' });
     (async () => {
-      const source = await pdfSource(doc);
+      let source = await pdfSource(doc);
       if (!source) {
         if (!cancelled) setStatus({ phase: 'error', code: doc.sync === 'cloud' ? (navigator.onLine ? 'not-ready' : 'offline') : 'missing' });
         return;
@@ -98,8 +105,30 @@ function Reader({ id }) {
       try {
         opened = await openPdf(source);
       } catch (err) {
-        if (!cancelled) setStatus({ phase: 'error', code: err?.name === 'PasswordException' ? 'password' : navigator.onLine || source.local ? 'invalid' : 'offline' });
-        return;
+        // Say what really went wrong (and keep the evidence in the console): "could not be opened" can be a sign-in that
+        // expired, a file the server does not have, a server error, or a damaged copy on this device.
+        console.error('[Quarc Reader] could not open the document', { id: doc.id, from: source.local ? 'this device' : 'the server', sha256: doc.file_sha256 }, err);
+        let failure = err;
+        let failedSource = source;
+        // A damaged copy kept on this device of a document that is also on the server: drop the copy, read the server's.
+        if (source.local && doc.sync === 'cloud' && doc.file_ready && describeOpenError(err, { local: true }).code === 'invalid-local' && (await removeOfflineCopy(doc.id))) {
+          const again = await pdfSource(doc);
+          if (again && !again.local) {
+            source = again;
+            try {
+              opened = await openPdf(again);
+              failure = null;
+            } catch (err2) {
+              console.error('[Quarc Reader] the server\'s copy could not be opened either', err2);
+              failure = err2;
+              failedSource = again;
+            }
+          }
+        }
+        if (failure) {
+          if (!cancelled) setStatus({ phase: 'error', ...describeOpenError(failure, { local: !!failedSource.local, online: navigator.onLine }) });
+          return;
+        }
       }
       if (cancelled) {
         opened.dispose();
@@ -279,14 +308,31 @@ function Reader({ id }) {
         <div className="flex h-20 w-20 items-center justify-center rounded-full bg-neutral-100 text-neutral-400 dark:bg-neutral-800">
           <CloudOff size={36} />
         </div>
-        <p className="max-w-sm text-center font-serif text-lg text-neutral-700 dark:text-neutral-200">{t(`reader.error.${status.code}`)}</p>
-        <div className="flex gap-2">
+        <p data-testid="reader-error" className="max-w-sm text-center font-serif text-lg text-neutral-700 dark:text-neutral-200">{t(`reader.error.${status.code}`)}</p>
+        {status.detail && (
+          <p data-testid="reader-error-detail" className="max-w-sm select-text break-words text-center text-xs text-neutral-400">
+            {t('reader.errorDetails')}: {status.detail}
+          </p>
+        )}
+        <div className="flex flex-wrap justify-center gap-2">
           <PrimaryButton onClick={() => navigate('/')}>{t('reader.backToLibrary')}</PrimaryButton>
-          {status.code === 'offline' || status.code === 'not-ready' ? (
+          {RETRYABLE.includes(status.code) && (
             <button className="rounded-full border border-neutral-300 px-5 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-600 dark:hover:bg-neutral-800" onClick={() => window.location.reload()}>
               {t('common.retry')}
             </button>
-          ) : null}
+          )}
+          {status.code === 'signin' && (
+            <button
+              data-testid="reader-signin"
+              className="rounded-full border border-neutral-300 px-5 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-600 dark:hover:bg-neutral-800"
+              onClick={async () => {
+                await useAuthStore.getState().logout();
+                navigate('/login');
+              }}
+            >
+              {t('reader.error.signInAgain')}
+            </button>
+          )}
         </div>
       </Centered>
     );

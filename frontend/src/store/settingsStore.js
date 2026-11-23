@@ -34,6 +34,7 @@ const DEFAULTS = {
   // Reading
   readMode: 'ask', // 'ask' (every time a document is opened) | 'scroll' | 'book'
   pageTurn: 'swipe', // book mode: 'swipe' | 'tap' (tap the screen edges) | 'both'
+  keepAwake: true, // keep the screen on (no dimming, no lock) while a document is open
   findAccents: false, // find in text: false = "cay" also finds "çay"; true = accents must match
 };
 

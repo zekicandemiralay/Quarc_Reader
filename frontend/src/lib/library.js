@@ -223,6 +223,8 @@ export async function pdfSource(doc) {
   return null;
 }
 
+const VERIFY_HASH_UP_TO = 150 * 1024 * 1024; // bytes
+
 // Keeps a synced document's file on this device, for reading offline.
 export async function cacheOffline(id, { onProgress } = {}) {
   const doc = await db.docs.get(id);
@@ -236,6 +238,10 @@ export async function cacheOffline(id, { onProgress } = {}) {
         onProgress?.(pct);
       },
     });
+    // Only the real file is ever kept: a copy that was cut short or is an error page would be read instead of the
+    // server's and the document would not open. (The hash needs the whole file in memory, so very big ones get the size check only.)
+    if (doc.file_size && blob.size !== doc.file_size) throw new Error(`The download was incomplete (${blob.size} of ${doc.file_size} bytes).`);
+    if (blob.size <= VERIFY_HASH_UP_TO && (await sha256Hex(await blob.arrayBuffer())) !== doc.file_sha256) throw new Error('The download was damaged.');
     await db.blobs.put({ sha256: doc.file_sha256, blob, size: blob.size, last_used: Date.now() });
     setTransfer(id, null);
     emit('docs-changed', [id]);
