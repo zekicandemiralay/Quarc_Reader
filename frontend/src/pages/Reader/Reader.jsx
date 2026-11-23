@@ -345,6 +345,7 @@ function Reader({ id }) {
             key={`${doc.id}`}
             ref={canvasRef}
             docId={doc.id}
+            title={doc.title}
             pdf={pdf}
             pages={pages}
             annotations={annotations}

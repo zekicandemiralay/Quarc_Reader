@@ -37,6 +37,13 @@ import SelectionBar from './SelectionBar';
 import MarkPopover from './MarkPopover';
 import FindBar from './FindBar';
 import useFind from './useFind';
+import SnipBar from './SnipBar';
+import { renderRegion } from './snipRender';
+import { MIN_SIZE, CURSORS, handlePoints, hitTest, dragRect, rectFromPoints, clampPoint, outputScale, pastedPictureSize, snipName } from './snip';
+import { pushRecent } from '../lib/color';
+import { copyImageToClipboard, copyTextToClipboard } from '../lib/clipboard';
+import { saveBlob } from '../lib/saveFile';
+import { toast } from '../components/Toasts';
 
 const HOLD_MS = 500; // keep the pen still this long at a stroke's end to snap it to a shape
 const HOLD_RADIUS = { pen: 6, mouse: 5, touch: 10 }; // screen px of jitter that still counts as "still"
@@ -76,7 +83,7 @@ function isEraserButton(e) {
 const layoutSignature = (pages) => pages.map((p) => `${p.key}:${Math.round(p.w)}x${Math.round(p.h)}`).join('|');
 
 const ReaderCanvas = forwardRef(function ReaderCanvas(
-  { docId, pdf, pages, annotations, readOnly = false, mode, paper, initialPosition, onSavePage, onPosition, onPageChange, onMarksChange, onTurn, chrome = true, onToggleChrome, topInset = 0 },
+  { docId, title = '', pdf, pages, annotations, readOnly = false, mode, paper, initialPosition, onSavePage, onPosition, onPageChange, onMarksChange, onTurn, chrome = true, onToggleChrome, topInset = 0 },
   ref
 ) {
   const { t, i18n } = useTranslation();
@@ -140,6 +147,23 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const [findOpen, setFindOpen] = useState(false); // the find-in-text bar (Ctrl+F)
   const findHitsRef = useRef(new Map()); // page key -> the hits to draw (see useFind)
   const findRef = useRef(null);
+  // The snip tool: a region of one page to copy or save. snipRef is the live region ({ pageIndex, key, x, y, w, h },
+  // page-local px); snipRect mirrors it into state once it is chosen, for the bar.
+  const [snipOn, setSnipOn] = useState(false);
+  const [snipRect, setSnipRect] = useState(null);
+  const [snipBusy, setSnipBusy] = useState(false);
+  const snipAnnotations = useSettings((s) => s.snipAnnotations);
+  const snipOnRef = useRef(false);
+  snipOnRef.current = snipOn;
+  const snipRef = useRef(null);
+  const snipDrag = useRef(null);
+  const snipCanvasRef = useRef(null);
+  const snipActions = useRef({});
+  const toolBeforeSnip = useRef(null);
+  const lastCopy = useRef(null); // the last picture copied from a region (its pixel size and the region's), see pastedPictureSize
+  const lastPointer = useRef(null); // where the pointer last was (client px), for pasting there
+  const penHistory = useSettings((s) => s.penColorHistory);
+  const hlHistory = useSettings((s) => s.hlColorHistory);
 
   const apiRef = useRef(null);
   const containerRef = useRef(null);
@@ -190,7 +214,8 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const isDrawToolRef = useRef(isDrawTool);
   isDrawToolRef.current = isDrawTool;
   // Text layers exist only when something needs the words: selecting, snapping a highlighter, finding.
-  const textNeeded = textMode || (isDrawTool && tool === 'highlighter' && snapText && !readOnly) || findOpen;
+  const textNeeded = textMode || (isDrawTool && tool === 'highlighter' && snapText && !readOnly) || findOpen || snipOn;
+  const eraserOn = activeToolType === 'eraser' && !textMode && !selectionTool && !snipOn;
 
   // ---------- view (scroll/zoom) + paper ----------
 
@@ -254,6 +279,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     drawMarks(marksCanvasRef.current, view, rect, L, marksRef.current, { dark: p.dark, hidden: false, selectedId: markPopRef.current?.mark.id, onlyIndex, finds: findHitsRef.current });
     clipInk(book && L.n ? pageRect(L, onlyIndex) : null, view, rect);
     textRef.current?.sync(L, view, rect, visible, { enabled: textNeededRef.current, interactive: textModeRef.current });
+    drawSnip();
 
     const index = currentPage(L, view, rect);
     if (modeRef.current === 'book' && index !== bookPageRef.current) bookPageRef.current = index;
@@ -370,7 +396,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     const dpr = window.devicePixelRatio || 1;
     const rect = el.getBoundingClientRect();
     sizeRef.current = { width: rect.width, height: rect.height };
-    for (const canvas of [paperRef.current, marksCanvasRef.current, overlayRef.current]) {
+    for (const canvas of [paperRef.current, marksCanvasRef.current, overlayRef.current, snipCanvasRef.current]) {
       if (!canvas) continue;
       canvas.width = Math.round(rect.width * dpr);
       canvas.height = Math.round(rect.height * dpr);
@@ -593,16 +619,25 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     setSelectionTool(null);
   }
 
+  // A colour that is picked is also remembered (newest first) for the "recent colours" of that tool.
   function changePen(patch) {
     setTextMode(false);
-    updatePrefs({ tool: 'pen', ...(patch.color ? { penColor: patch.color } : {}), ...(patch.size ? { penSize: patch.size } : {}) });
+    const color = patch.color ? { penColor: patch.color, penColorHistory: pushRecent(useSettings.getState().penColorHistory, patch.color) } : {};
+    updatePrefs({ tool: 'pen', ...color, ...(patch.size ? { penSize: patch.size } : {}) });
     apiRef.current?.setActiveTool({ type: 'freedraw' });
   }
 
   function changeHighlighter(patch) {
     setTextMode(false);
-    updatePrefs({ tool: 'highlighter', ...(patch.color ? { hlColor: patch.color } : {}), ...(patch.size ? { hlSize: patch.size } : {}) });
+    const color = patch.color ? { hlColor: patch.color, hlColorHistory: pushRecent(useSettings.getState().hlColorHistory, patch.color) } : {};
+    updatePrefs({ tool: 'highlighter', ...color, ...(patch.size ? { hlSize: patch.size } : {}) });
     apiRef.current?.setActiveTool({ type: 'freedraw' });
+  }
+
+  // The eraser button of the dock: on, and back to the pen or highlighter you had.
+  function toggleEraser() {
+    if (eraserOn) selectDrawMode(tool);
+    else chooseTool('eraser');
   }
 
   function toggleTextMode() {
@@ -1322,7 +1357,17 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     }
 
     const p = prefsRef.current;
-    const fingerSelects = e.pointerType !== 'touch' || p.fingerDraws;
+    // (In a shared link, which is read-only, a finger has nothing to draw: it chooses the snip region.)
+    const fingerSelects = e.pointerType !== 'touch' || p.fingerDraws || (p.readOnly && snipOnRef.current);
+    // Snip tool: a drag chooses (or moves, or resizes) the region.
+    if (snipOnRef.current && fingerSelects && !(e.pointerType === 'touch' && Date.now() - lastPenActivity.current < PALM_WINDOW_MS)) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      consume(e);
+      if (snipDrag.current) return;
+      if (e.pointerType === 'pen') lastPenActivity.current = Date.now();
+      startSnipDrag(e);
+      return;
+    }
     if (selectionToolRef.current && fingerSelects && !(e.pointerType === 'touch' && Date.now() - lastPenActivity.current < PALM_WINDOW_MS)) {
       if (selectionDrawing.current) {
         consume(e);
@@ -1397,11 +1442,11 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       return;
     }
 
-    if (isDrawToolRef.current || selectionToolRef.current || p.readOnly) {
+    if (isDrawToolRef.current || selectionToolRef.current || snipOnRef.current || p.readOnly) {
       consume(e);
       touchTrack.current = { pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, consumed: true };
       // A finger that draws still scrolls when it lands on the desk.
-      if (!(p.fingerDraws && !selectionToolRef.current && startStroke(e))) beginPan(e);
+      if (!(p.fingerDraws && !selectionToolRef.current && !snipOnRef.current && startStroke(e))) beginPan(e);
       return;
     }
 
@@ -1432,10 +1477,18 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 
   function handlePointerMoveCapture(e) {
     if (e.pointerType === 'pen') lastPenActivity.current = Date.now();
+    lastPointer.current = { x: e.clientX, y: e.clientY };
     if (ignoredTouches.current.has(e.pointerId)) {
       consume(e);
       return;
     }
+    const snipD = snipDrag.current;
+    if (snipD && e.pointerId === snipD.pointerId) {
+      consume(e);
+      moveSnipDrag(e);
+      return;
+    }
+    if (snipOnRef.current && !snipD && e.pointerType === 'mouse') updateSnipCursor(e);
     const sel = selectionDrawing.current;
     if (sel && e.pointerId === sel.pointerId) {
       consume(e);
@@ -1499,6 +1552,12 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   function handlePointerUpCapture(e) {
     if (ignoredTouches.current.delete(e.pointerId)) {
       consume(e);
+      return;
+    }
+    const snipD = snipDrag.current;
+    if (snipD && e.pointerId === snipD.pointerId) {
+      consume(e);
+      endSnipDrag();
       return;
     }
     const sel = selectionDrawing.current;
@@ -1701,6 +1760,330 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
+  // ---------- snip: copy or save a region of a page ----------
+  //
+  // The dock's Snip button: drag a rectangle on a page (the rest dims), move or resize it by its handles, then copy
+  // it as a picture (Ctrl+C), save it, or copy the words in it. The picture is drawn again from the document at
+  // full sharpness (snipRender.js). Ctrl+V pastes a picture or text (from here or from any other program) onto
+  // the page, as a thing that can be moved at once.
+
+  function snipToScreen(s) {
+    const v = currentView();
+    const r = pageRect(layoutRef.current, s.pageIndex);
+    return { x: (r.x + s.x + v.scrollX) * v.zoom, y: (r.y + s.y + v.scrollY) * v.zoom, w: s.w * v.zoom, h: s.h * v.zoom };
+  }
+
+  // The dimmed page around the region, its outline and the eight handles — on a canvas of its own, above the page
+  // and below the bars, redrawn with every change of the view so it stays on the page.
+  function drawSnip() {
+    const canvas = snipCanvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const W = canvas.width / dpr;
+    const H = canvas.height / dpr;
+    ctx.clearRect(0, 0, W, H);
+    const s = snipRef.current;
+    if (!snipOnRef.current || !s || !currentView()) return;
+    const r = snipToScreen(s);
+    ctx.save();
+    ctx.fillStyle = 'rgba(24, 16, 40, 0.45)';
+    ctx.beginPath();
+    ctx.rect(0, 0, W, H);
+    ctx.rect(r.x, r.y, r.w, r.h);
+    ctx.fill('evenodd');
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#ffffff';
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = '#7c3aed';
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.setLineDash([]);
+    if (r.w >= 14 && r.h >= 14) {
+      ctx.fillStyle = '#ffffff';
+      for (const [hx, hy] of Object.values(handlePoints(r))) {
+        ctx.beginPath();
+        ctx.roundRect(hx - 5, hy - 5, 10, 10, 3);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function setSnip(next) {
+    snipRef.current = next;
+    setSnipRect(next ? { ...next } : null);
+    drawSnip();
+  }
+
+  function pageBounds(pageIndex) {
+    const r = pageRect(layoutRef.current, pageIndex);
+    return { w: r.width, h: r.height };
+  }
+
+  function startSnipDrag(e) {
+    const v = currentView();
+    if (!v) return;
+    const box = containerRef.current.getBoundingClientRect();
+    gestureRect.current = box;
+    const pt = localPoint(e, box);
+    const cur = snipRef.current;
+    const hit = cur ? hitTest(snipToScreen(cur), pt, e.pointerType === 'touch' ? 18 : 10) : null;
+    if (hit) {
+      capture(e);
+      snipDrag.current = { pointerId: e.pointerId, kind: hit, start: pt, rect0: { x: cur.x, y: cur.y, w: cur.w, h: cur.h }, zoom: v.zoom, bounds: pageBounds(cur.pageIndex) };
+      return;
+    }
+    const pg = pageUnderPoint(pt);
+    if (!pg) {
+      setSnip(null); // a press on the desk beside the pages: no region
+      return;
+    }
+    capture(e);
+    const bounds = { w: pg.width, h: pg.height };
+    const anchor = clampPoint({ x: pt.x / v.zoom - v.scrollX - pg.x, y: pt.y / v.zoom - v.scrollY - pg.y }, bounds);
+    snipDrag.current = { pointerId: e.pointerId, kind: 'new', anchor, origin: pg, bounds };
+    snipRef.current = { pageIndex: pg.index, key: pg.key, x: anchor.x, y: anchor.y, w: 0, h: 0 };
+    drawSnip();
+  }
+
+  function moveSnipDrag(e) {
+    const d = snipDrag.current;
+    const v = currentView();
+    if (!d || !v) return;
+    const pt = localPoint(e, gestureRect.current);
+    if (d.kind === 'new') {
+      const p = clampPoint({ x: pt.x / v.zoom - v.scrollX - d.origin.x, y: pt.y / v.zoom - v.scrollY - d.origin.y }, d.bounds);
+      snipRef.current = { ...snipRef.current, ...rectFromPoints(d.anchor, p) };
+    } else {
+      snipRef.current = { ...snipRef.current, ...dragRect(d.rect0, d.kind, (pt.x - d.start.x) / d.zoom, (pt.y - d.start.y) / d.zoom, d.bounds) };
+    }
+    drawSnip();
+  }
+
+  function endSnipDrag() {
+    const d = snipDrag.current;
+    snipDrag.current = null;
+    const s = snipRef.current;
+    if (!s) return;
+    // A click (or a sliver) is not a region: it clears the last one.
+    if (d?.kind === 'new' && (s.w < MIN_SIZE || s.h < MIN_SIZE)) setSnip(null);
+    else setSnip({ ...s });
+  }
+
+  // The cursor over the region: the handle's arrows, a cross-hair elsewhere.
+  function updateSnipCursor(e) {
+    const el = containerRef.current;
+    const s = snipRef.current;
+    if (!el || !currentView()) return;
+    const box = el.getBoundingClientRect();
+    const hit = s ? hitTest(snipToScreen(s), { x: e.clientX - box.left, y: e.clientY - box.top }, 10) : null;
+    el.style.cursor = CURSORS[hit] || 'crosshair';
+  }
+
+  function startSnip() {
+    if (snipOnRef.current) return;
+    snipOnRef.current = true;
+    setFindOpen(false);
+    toolBeforeSnip.current = { textMode: textModeRef.current, tool: activeToolType };
+    setTextMode(false);
+    clearTextSelection();
+    setSelectionTool(null);
+    apiRef.current?.setActiveTool({ type: 'selection' });
+    setSnip(null);
+    setSnipOn(true);
+  }
+
+  function stopSnip({ restore = true } = {}) {
+    if (!snipOnRef.current) return;
+    snipOnRef.current = false;
+    snipDrag.current = null;
+    setSnip(null);
+    setSnipOn(false);
+    if (containerRef.current) containerRef.current.style.cursor = '';
+    const prev = toolBeforeSnip.current;
+    toolBeforeSnip.current = null;
+    if (restore && prev) {
+      if (prev.textMode) {
+        setTextMode(true);
+        apiRef.current?.setActiveTool({ type: 'hand' });
+      } else {
+        apiRef.current?.setActiveTool({ type: prev.tool || 'freedraw' });
+      }
+    }
+    scheduleSyncPaper(); // the text layers can go again
+  }
+
+  // The picture of the region: the page, and (unless switched off) my highlights, ink, shapes, text and pictures.
+  async function snipPicture() {
+    const s = snipRef.current;
+    const L = layoutRef.current;
+    const page = s && L.pages[s.pageIndex];
+    if (!page) return null;
+    const v = currentView();
+    const scale = outputScale({ w: s.w, h: s.h, zoom: v?.zoom || 1, dpr: window.devicePixelRatio || 1 });
+    const withInk = useSettings.getState().snipAnnotations;
+    const api = apiRef.current;
+    const ink = withInk && api ? { elements: bucketElements(L, api.getSceneElements()).get(page.key) || [], files: api.getFiles() } : null;
+    const out = await renderRegion({ pdf, page, rect: s, scale, marks: withInk ? marksRef.current.get(page.key) || [] : [], ink });
+    return { ...out, name: snipName(title, s.pageIndex + 1) };
+  }
+
+  async function snipAct(kind) {
+    if (snipBusy || !snipRef.current) return;
+    setSnipBusy(true);
+    try {
+      if (kind === 'text') {
+        const s = snipRef.current;
+        const text = await textRef.current?.textInRect(s.pageIndex, s);
+        if (!text) {
+          toast(t('snip.noText'));
+          return;
+        }
+        await copyTextToClipboard(text);
+        toast(t('snip.textCopied'));
+      } else if (kind === 'save') {
+        const pic = await snipPicture();
+        if (!pic) return;
+        const result = await saveBlob(pic.blob, pic.name);
+        if (result !== 'cancelled') toast(result === 'saved' ? t('snip.saved') : result === 'shared' ? t('snip.shared') : t('snip.downloaded'));
+      } else {
+        // The clipboard write starts at once, with the picture still to come: browsers want it inside the key press / tap.
+        const made = snipPicture();
+        const region = { w: snipRef.current.w, h: snipRef.current.h };
+        try {
+          await copyImageToClipboard(made.then((p) => p.blob));
+          const pic = await made;
+          lastCopy.current = { picW: pic.width, picH: pic.height, ...region };
+          toast(t('snip.copied'));
+        } catch {
+          const pic = await made.catch(() => null);
+          if (pic && window.Capacitor?.isNativePlatform?.()) {
+            await saveBlob(pic.blob, pic.name);
+            toast(t('snip.copyFallback'));
+          } else {
+            toast(t('snip.copyFailed'), { duration: 7000 });
+          }
+        }
+      }
+    } catch {
+      toast(t('snip.failed'));
+    } finally {
+      setSnipBusy(false);
+    }
+  }
+  snipActions.current = { copy: () => snipAct('copy'), save: () => snipAct('save'), text: () => snipAct('text'), stop: () => stopSnip() };
+
+  // Snip keys: Esc leaves the tool; Ctrl/Cmd+C copies the picture of the region, Ctrl/Cmd+S saves it.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!snipOnRef.current || !e.key) return;
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (document.querySelector('div[class*="z-[1100]"] [role=dialog]')) return;
+      const key = e.key.toLowerCase();
+      const mod = (e.ctrlKey || e.metaKey) && !e.altKey;
+      let handled = true;
+      if (key === 'escape') snipActions.current.stop();
+      else if (mod && key === 'c' && snipRef.current) snipActions.current.copy();
+      else if (mod && key === 's' && snipRef.current) snipActions.current.save();
+      else handled = false;
+      if (handled) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  // Opening the find bar and the snip tool both want the top of the page: the last one wins.
+  useEffect(() => {
+    if (findOpen) stopSnip();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findOpen]);
+
+  // Ctrl+V: Excalidraw does the pasting (pictures, text, things copied from here) but only when it has the focus and the
+  // pointer last rested on its canvas — so make that so, with the paste going where the pointer is (else the middle).
+  // What was pasted is selected: switch to the select tool so it can be moved straight away.
+  useEffect(() => {
+    const onPaste = () => {
+      if (prefsRef.current.readOnly) return;
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (document.querySelector('div[class*="z-[1100]"] [role=dialog]')) return;
+      const container = containerRef.current;
+      const ex = container?.querySelector('.excalidraw');
+      if (!ex) return;
+      if (!ex.contains(document.activeElement)) ex.focus({ preventScroll: true });
+      const box = container.getBoundingClientRect();
+      const last = lastPointer.current;
+      const over = last && last.x >= box.left && last.x <= box.right && last.y >= box.top && last.y <= box.bottom && document.elementFromPoint(last.x, last.y) instanceof HTMLCanvasElement;
+      const at = over ? last : { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+      document.dispatchEvent(new PointerEvent('pointermove', { clientX: at.x, clientY: at.y, bubbles: true }));
+      selectAfterPaste();
+    };
+    window.addEventListener('paste', onPaste, true);
+    return () => window.removeEventListener('paste', onPaste, true);
+  }, []);
+
+  // Once what was pasted is selected: switch to the select tool; and bring a pasted picture to a sensible size as soon as
+  // it has loaded (it arrives at its own pixel size — see pastedPictureSize), keeping its centre where it was put.
+  function selectAfterPaste() {
+    const api = apiRef.current;
+    if (!api) return;
+    const before = JSON.stringify(api.getAppState().selectedElementIds || {});
+    const existing = new Set(api.getSceneElementsIncludingDeleted().map((el) => el.id));
+    const sized = new Set();
+    const lastDims = new Map();
+    let tries = 0;
+    let switched = false;
+    const timer = setInterval(() => {
+      tries++;
+      const selected = api.getAppState().selectedElementIds || {};
+      if (!switched) {
+        if (Object.keys(selected).length && JSON.stringify(selected) !== before) {
+          switched = true;
+          stopSnip({ restore: false });
+          chooseTool('selection');
+        } else if (tries > 25) {
+          clearInterval(timer);
+          return;
+        }
+      }
+      if (!switched) return;
+      const L = layoutRef.current;
+      const fix = new Map();
+      const files = api.getFiles();
+      const zoom = api.getAppState().zoom.value;
+      let waiting = 0;
+      for (const el of api.getSceneElements()) {
+        if (el.type !== 'image' || existing.has(el.id) || !selected[el.id] || sized.has(el.id)) continue;
+        // Until the picture has been decoded Excalidraw gives it a 100 px square placeholder; wait for the real size, and
+        // for it to stop changing.
+        const dims = `${el.width}x${el.height}`;
+        const placeholder = Math.abs(el.width - 100 / zoom) < 0.01 && Math.abs(el.height - 100 / zoom) < 0.01;
+        const steady = lastDims.get(el.id) === dims;
+        lastDims.set(el.id, dims);
+        if (!el.fileId || !files[el.fileId] || !(el.width > 1) || placeholder || !steady) {
+          waiting++;
+          continue;
+        }
+        sized.add(el.id);
+        const pageW = pageRect(L, pageAtY(L, el.y + el.height / 2)).width;
+        const size = pastedPictureSize({ w: el.width, h: el.height, pageW, lastCopy: lastCopy.current });
+        if (Math.abs(size.w - el.width) > 0.5) fix.set(el.id, { x: el.x + (el.width - size.w) / 2, y: el.y + (el.height - size.h) / 2, width: size.w, height: size.h });
+      }
+      if (fix.size) {
+        api.updateScene({ elements: api.getSceneElementsIncludingDeleted().map((el) => (fix.has(el.id) ? newElementWith(el, fix.get(el.id)) : el)), captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+      }
+      if (!waiting || tries > 60) clearInterval(timer);
+    }, 100);
+  }
+
   // ---------- MS-Paint-style cut selection ----------
 
   useEffect(() => {
@@ -1830,6 +2213,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     redo,
     fit: () => toggleFit(sizeRef.current.height / 2 + (containerRef.current?.getBoundingClientRect().top || 0)),
     openFind: () => findRef.current?.openFind(),
+    openSnip: () => startSnip(),
     marks: () => marksRef.current,
     // Another device changed these pages: merge them in, stroke by stroke.
     applyRemote(rows) {
@@ -1886,14 +2270,14 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const inkFilter = dark ? DARK_INK_FILTER : undefined;
   const desk = dark ? DESK.dark : paper === 'sepia' ? DESK.sepia : DESK.white;
   const n = layout.n;
-  const showToolbar = !readOnly && chrome && !findOpen; // the find bar takes the dock's place while it is open
+  const showToolbar = !readOnly && chrome && !findOpen && !snipOn; // the find bar and the snip bar take the dock's place while open
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div
         ref={containerRef}
         className={`quarc-reader-surface quarc-canvas-page relative min-h-0 flex-1 overflow-hidden ${isDrawTool ? 'quarc-pen-active' : ''} ${textMode ? 'quarc-text-mode' : ''} ${chrome ? 'quarc-chrome' : ''}`}
-        style={{ backgroundColor: desk, cursor: selectionTool ? 'crosshair' : undefined, marginTop: topInset }}
+        style={{ backgroundColor: desk, cursor: selectionTool || snipOn ? 'crosshair' : undefined, marginTop: topInset }}
         onPointerDownCapture={handlePointerDownCapture}
         onPointerMoveCapture={handlePointerMoveCapture}
         onPointerUpCapture={handlePointerUpCapture}
@@ -1952,6 +2336,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         />
         <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ filter: inkFilter }} />
         <div ref={textRootRef} className="absolute inset-0 overflow-hidden" style={{ pointerEvents: 'none', zIndex: 3 }} />
+        <canvas ref={snipCanvasRef} className="pointer-events-none absolute inset-0" style={{ zIndex: 4 }} />
 
         {showToolbar && (
           <Toolbar
@@ -1976,10 +2361,29 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
             cutMode={selectionTool}
             onTool={chooseTool}
             onCut={chooseCut}
+            eraserOn={eraserOn}
+            onEraser={toggleEraser}
+            onSnip={startSnip}
+            penHistory={penHistory}
+            hlHistory={hlHistory}
           />
         )}
 
         {findOpen && <FindBar find={find} />}
+        {snipOn && (
+          <SnipBar
+            snip={{
+              rect: snipRect,
+              busy: snipBusy,
+              annotations: snipAnnotations,
+              onToggleAnnotations: () => updatePrefs({ snipAnnotations: !snipAnnotations }),
+              onCopy: () => snipAct('copy'),
+              onSave: () => snipAct('save'),
+              onCopyText: () => snipAct('text'),
+              onClose: () => stopSnip(),
+            }}
+          />
+        )}
 
         {selBar && textMode && (
           <SelectionBar

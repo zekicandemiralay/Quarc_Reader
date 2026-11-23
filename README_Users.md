@@ -54,6 +54,13 @@ opens, where you left off.
 - **Paper** is sepia by default. Pick white, dark, or "follow theme" as the default in **Settings → Reading → Paper**; the
   **View** menu changes it for one document.
 - Double-tap fits the page (and, on a fitted page, zooms to its width); pinch to zoom as far as you need for fine handwriting.
+- **Snip part of a page:** tap the **crop** button on the toolbar, then drag a rectangle on a page. The rest of the page dims; drag the
+  handles to resize the rectangle or drag inside it to move it. **Copy image** (or **Ctrl+C**) puts a sharp picture of that part
+  on the clipboard, **Save image** saves a PNG (on Android it opens the share sheet), **Copy text** copies the words in the
+  rectangle. The picture is the page as it is printed; switch **Ink** off to leave out your own drawings and highlights. Press
+  **Esc** or the cross to leave.
+- **Paste:** **Ctrl+V** puts a picture or text from the clipboard onto the page — a snip you just copied (at the size you selected),
+  a screenshot, text from another program — selected, so you can drag it where you want it.
 - **Find a word:** press **Ctrl+F** (**Cmd+F** on a Mac) or tap the **search** button at the top. Type, and every place the word
   occurs in the whole document is marked; **Enter** / the arrows go to the next one (**Shift+Enter** back), **Esc** closes. The
   counter ("3 of 17") fills in as the document is searched. Capital letters never matter, and accents don't either unless you
@@ -65,10 +72,16 @@ opens, where you left off.
 
 ## Writing and highlighting
 
-The floating dock at the top of the page has **Pen**, **Highlighter** and **Select text**, with colours and sizes, undo/redo and
-the **Finger** switch. The **Tools** button next to it opens everything else (shapes, arrows, text, eraser, image…) plus
-the **cut selection** tools; the slider icon has **Snap shapes** and **Snap to text**. The bar at the bottom turns pages,
-jumps to any page (tap the counter) and zooms.
+The floating dock at the top of the page has **Pen**, **Highlighter**, **Eraser**, **Select text** and **Snip**, with colours and
+sizes, undo/redo and the **Finger** switch. The **Tools** button next to it opens everything else (shapes, arrows, text,
+image…) plus the **cut selection** tools; the slider icon has **Snap shapes** and **Snap to text**. The bar at the bottom turns
+pages, jumps to any page (tap the counter) and zooms.
+
+- **Eraser:** the rubber on the dock; drag across a stroke to erase it, press it again to go back to the pen.
+- **Colours:** the dots are the ready-made colours. The last, rainbow-coloured dot opens **recent colours** (the ones you used
+  lately, newest first — the pen and the highlighter each have their own) and a **colour picker**: drag in the square, slide the
+  hue, type or paste a code like `#12ab34`, or pick a colour from anywhere on the screen with the pipette (where your
+  browser has one).
 
 - **Pencil / stylus:** pressure-sensitive. The first time a stylus touches the screen, fingers switch to scrolling so a
   resting hand never draws (switch it back with the **Finger** button). Hold the pen still at the end of a stroke to snap it

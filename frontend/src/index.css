@@ -84,6 +84,36 @@ button:focus:not(:focus-visible) {
   background: rgb(124 58 237 / 0.30);
 }
 
+/* The hue slider of the colour picker: a rainbow track. */
+input[type='range'].quarc-hue {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #f00 0%, #ff0 16.7%, #0f0 33.3%, #0ff 50%, #00f 66.7%, #f0f 83.3%, #f00 100%);
+  outline-offset: 4px;
+}
+input[type='range'].quarc-hue::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid #7c3aed;
+  box-shadow: 0 2px 6px rgb(36 22 66 / 0.3);
+  cursor: pointer;
+}
+input[type='range'].quarc-hue::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  border: 2px solid #7c3aed;
+  box-shadow: 0 2px 6px rgb(36 22 66 / 0.3);
+  cursor: pointer;
+}
+
 /* Range sliders (the go-to-page scrubber). */
 input[type='range'].quarc-range {
   -webkit-appearance: none;

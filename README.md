@@ -11,7 +11,10 @@ iOS (as a PWA).
   remembered per document, bookmarks, sepia (default) / white / dark paper, a "continue reading" shelf
 - **Find in the document** — Ctrl+F (or the search button): every hit in the book is counted and marked on the page, next / previous
   step through them, accents optional ("cay" finds "çay")
-- **Write on the pages** — the Quarc Notes engine: pressure-sensitive pen, highlighter, hold-to-snap shapes, stylus eraser,
+- **Snip part of a page** — drag a rectangle (move or resize it by its handles), then **copy it as a picture** (Ctrl+C), **save** it, or
+  **copy its text**; Ctrl+V pastes any picture or text onto a page, ready to move
+- **Write on the pages** — the Quarc Notes engine: pressure-sensitive pen, highlighter, hold-to-snap shapes, an eraser on the dock
+  (and the stylus's own eraser end), a colour picker with your recent colours,
   MS-Paint-style cut selection, every Excalidraw tool (shapes, arrows, text, images), palm rejection, undo/redo
 - **Real text highlights** — select text (or just swipe the highlighter over it: it **snaps to the words**) and it becomes a
   highlight / underline / strike-through with an optional note; listed in a notes panel; tap one to edit it

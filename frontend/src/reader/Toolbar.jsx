@@ -21,8 +21,10 @@ import {
   MousePointer2,
   Sparkles,
   ChevronDown,
+  Crop,
 } from 'lucide-react';
 import Popover from '../components/Popover';
+import ColorPanel from './ColorPanel';
 
 export const PEN_COLORS = ['#1f2937', '#e03131', '#2f9e44', '#1971c2', '#f08c00', '#7048e8'];
 export const HIGHLIGHTER_COLORS = ['#ffd43b', '#8ce99a', '#74c0fc', '#faa2c1', '#ffc078'];
@@ -51,6 +53,7 @@ export const FreeformSelectIcon = (
 );
 
 // Every other tool Excalidraw has, shown in the "Tools" flyout instead of Excalidraw's own island.
+// (The eraser is not here: it has its own button on the dock.)
 const TOOLS = [
   ['selection', MousePointer2, 'select'],
   ['hand', Hand, 'hand'],
@@ -61,7 +64,6 @@ const TOOLS = [
   ['line', Minus, 'line'],
   ['text', Type, 'text'],
   ['image', ImagePlus, 'image'],
-  ['eraser', Eraser, 'eraser'],
 ];
 
 function DockButton({ active, onClick, title, children, disabled, className = '', testId }) {
@@ -85,9 +87,8 @@ function DockButton({ active, onClick, title, children, disabled, className = ''
 
 const Divider = ({ className = '' }) => <div className={`mx-1 h-6 w-px shrink-0 bg-neutral-300/70 dark:bg-neutral-600/70 ${className}`} />;
 
-function Swatches({ colors, active, drawMode, isHl, onPick, inkFilter, wrap = false }) {
-  const { t } = useTranslation();
-  const custom = !colors.includes(active.color);
+// The preset colours, and (on a wide dock) the button that opens the rest: the colours used lately and the picker.
+function Swatches({ colors, active, drawMode, isHl, onPick, inkFilter, wrap = false, more }) {
   const ring = (on) => (on ? 'ring-accent' : 'ring-transparent hover:ring-neutral-300 dark:hover:ring-neutral-500');
   return (
     <div className={`flex shrink-0 items-center ${wrap ? 'flex-wrap gap-2' : 'gap-1.5'}`} style={{ filter: inkFilter }}>
@@ -102,18 +103,7 @@ function Swatches({ colors, active, drawMode, isHl, onPick, inkFilter, wrap = fa
           style={{ backgroundColor: c, opacity: isHl ? 0.9 : 1 }}
         />
       ))}
-      <label
-        title={t('canvas.customColor')}
-        className={`relative flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-surface dark:ring-offset-neutral-800 ${ring(custom && drawMode)}`}
-        style={{ background: custom ? active.color : 'conic-gradient(#f03e3e, #fab005, #40c057, #15aabf, #4c6ef5, #be4bdb, #f03e3e)' }}
-      >
-        <input
-          type="color"
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-          value={/^#[0-9a-f]{6}$/i.test(active.color) ? active.color : '#000000'}
-          onChange={(e) => onPick({ color: e.target.value })}
-        />
-      </label>
+      {more && more({ custom: !colors.includes(active.color), ring })}
     </div>
   );
 }
@@ -172,10 +162,16 @@ export default function Toolbar({
   cutMode, // null | 'rect' | 'freeform' — the cut selection
   onTool,
   onCut,
+  eraserOn,
+  onEraser,
+  onSnip,
+  penHistory = [], // colours used lately with the pen / the highlighter, newest first
+  hlHistory = [],
 }) {
   const { t } = useTranslation();
-  const [menu, setMenu] = useState(null); // 'color' | 'tools' | 'options'
+  const [menu, setMenu] = useState(null); // 'color' | 'more' | 'tools' | 'options'
   const colorBtn = useRef(null);
+  const moreBtn = useRef(null);
   const toolsBtn = useRef(null);
   const optionsBtn = useRef(null);
   const isHl = drawMode === 'highlighter';
@@ -183,10 +179,28 @@ export default function Toolbar({
   const common = { active, drawMode, isHl, onPick: isHl ? onHighlighterChange : onPenChange, inkFilter };
   const colors = isHl ? HIGHLIGHTER_COLORS : PEN_COLORS;
   const sizes = isHl ? HIGHLIGHTER_SIZES : PEN_SIZES;
+  // Which colours the pen (or highlighter) was used with lately: the panel that opens from the colour buttons.
+  const panel = { value: active.color, recent: isHl ? hlHistory : penHistory, onPick: common.onPick, inkFilter };
 
-  // Is one of the "other" tools active (so the Tools button shows it)?
-  const otherTool = !textMode && !drawMode ? (cutMode ? `cut-${cutMode}` : activeTool) : null;
+  // Is one of the "other" tools active (so the Tools button shows it)? The eraser has its own button.
+  const otherTool = !textMode && !drawMode && !eraserOn ? (cutMode ? `cut-${cutMode}` : activeTool) : null;
   const CurrentToolIcon = (otherTool && TOOLS.find(([type]) => type === otherTool)?.[1]) || null;
+
+  // The last circle of the colour row: opens the recent colours and the picker (it shows the colour when it is not a preset).
+  const moreColors = ({ custom, ring }) => (
+    <span ref={moreBtn} className="shrink-0">
+      <button
+        type="button"
+        data-testid="color-more"
+        title={t('canvas.moreColors')}
+        aria-label={t('canvas.moreColors')}
+        aria-expanded={menu === 'more'}
+        onClick={() => setMenu(menu === 'more' ? null : 'more')}
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-surface dark:ring-offset-neutral-800 ${ring(custom && drawMode)}`}
+        style={{ background: custom ? active.color : 'conic-gradient(#f03e3e, #fab005, #40c057, #15aabf, #4c6ef5, #be4bdb, #f03e3e)' }}
+      />
+    </span>
+  );
   const choose = (fn) => () => {
     setMenu(null);
     fn();
@@ -205,18 +219,27 @@ export default function Toolbar({
       <DockButton active={isHl} onClick={() => onDrawMode('highlighter')} title={t('canvas.highlighter')} testId="tool-highlighter">
         <Highlighter size={18} />
       </DockButton>
+      <DockButton active={eraserOn} onClick={onEraser} title={t('reader.tool.eraser')} testId="tool-eraser">
+        <Eraser size={18} />
+      </DockButton>
       <DockButton active={textMode} onClick={onTextMode} title={t('reader.selectText')} testId="tool-text-select">
         <TextCursorInput size={18} />
+      </DockButton>
+      <DockButton onClick={onSnip} title={t('snip.title')} testId="tool-snip">
+        <Crop size={18} />
       </DockButton>
       <Divider />
 
       {/* Tablets/desktop: colours and sizes inline. */}
       <div className="hidden shrink-0 items-center gap-1 sm:flex">
-        <Swatches colors={colors} {...common} />
+        <Swatches colors={colors} {...common} more={moreColors} />
         <Divider />
         <Sizes sizes={sizes} {...common} />
         <Divider />
       </div>
+      <Popover anchorRef={moreBtn} open={menu === 'more'} onClose={() => setMenu(null)} align="center" className="w-64 p-3">
+        <ColorPanel {...panel} />
+      </Popover>
 
       {/* Phones: behind one button showing the current colour and size. */}
       <span ref={colorBtn} className="shrink-0 sm:hidden">
@@ -230,11 +253,8 @@ export default function Toolbar({
           <span className="rounded-full" style={{ width: Math.min(12, 3 + active.size), height: Math.min(12, 3 + active.size), backgroundColor: active.color, filter: inkFilter }} />
         </button>
       </span>
-      <Popover anchorRef={colorBtn} open={menu === 'color'} onClose={() => setMenu(null)} className="w-64 p-3">
-        <div className="flex flex-col gap-3">
-          <Swatches colors={colors} {...common} wrap />
-          <Sizes sizes={sizes} {...common} />
-        </div>
+      <Popover anchorRef={colorBtn} open={menu === 'color'} onClose={() => setMenu(null)} className="max-h-[85vh] w-64 overflow-y-auto p-3">
+        <ColorPanel {...panel} top={<Swatches colors={colors} {...common} wrap />} bottom={<Sizes sizes={sizes} {...common} />} />
       </Popover>
       <Divider className="sm:hidden" />
 

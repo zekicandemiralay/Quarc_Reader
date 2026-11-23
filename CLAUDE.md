@@ -69,6 +69,29 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   DOM offsets. Ctrl+F is caught on `window` in the capture phase (`stopImmediatePropagation`) — Excalidraw 0.18 has its own
   Ctrl+F canvas search that would otherwise open. Not done: words hyphenated over a line break, whole-word / regex, searching
   the whole library, turning a hit into a highlight. A synced document that was never downloaded is read in full by a search.
+- **Dock: eraser and colours** (`reader/Toolbar.jsx`, `ColorPanel.jsx`, `ColorPicker.jsx`, `lib/color.js`): the eraser is a dock
+  button (Excalidraw's own eraser tool; pressing it again goes back to the pen/highlighter in `settings.tool`) and is not in the
+  Tools flyout any more. The preset swatches stay inline in the dock (tests click `button[aria-label="#e03131"]`); the last circle
+  (`color-more`) opens the *recent colours* — `penColorHistory` / `hlColorHistory` in the settings, newest first, 12 at most, one list
+  per tool, pushed by `changePen` / `changeHighlighter` — and an in-app picker (saturation/brightness square, hue slider, hex box,
+  EyeDropper where the browser has it). The picker commits on pointer-up / Enter / (keys) 600 ms after the last one, never per
+  pixel, or a drag or a held arrow key would flood the history; the hex box commits only what was typed (leaving it after a drag
+  must not add the colour the drag happened to be at).
+- **Snip** (dock button `tool-snip`; `openSnip()` for the shared view's header): drag a rectangle on a page, move/resize it by its
+  handles, then copy it as a picture, save it, or copy the words in it. `reader/snip.js` is the pure part (rect/handle/drag maths,
+  `outputScale`, `pastedPictureSize`), `snipRender.js` redraws the region from the document at full sharpness (pdf.js with a
+  `transform` offset, `paintMark` multiplied over it, ink/shapes/text/pictures by Excalidraw's `exportToCanvas`; always the page's
+  own white paper, ink in its own colours) and `SnipBar.jsx` replaces the dock while on. The dimming and handles are drawn on a
+  canvas of their own (`snipCanvasRef`, z-index 4) — not the overlay canvas, which carries the dark-mode invert filter. Pointer
+  routing follows the cut tool (`snipDrag`). Ctrl+C copies the picture (the clipboard write starts inside the key press with a
+  *promise*: `ClipboardItem({ 'image/png': promise })`), Ctrl+S saves, Esc leaves; "copy text" is `TextLayerManager.textInRect`.
+  Copying a picture needs a secure context; on Android the fallback is the share sheet.
+- **Ctrl+V** is Excalidraw's own paste handler (pictures, text, copied elements), which only runs when the focus is inside
+  `.excalidraw` and its last pointer position (a `document` `pointermove`) was over its canvas. A window-capture `paste` listener in
+  `ReaderCanvas` makes both true (focus, plus a synthetic `pointermove` at the last real pointer or the middle). Afterwards the
+  select tool is switched on, and a pasted picture is resized once decoded: Excalidraw first gives it a 100 px square placeholder
+  and its `status` stays `'pending'` for ever in an embed (don't wait for `'saved'`); the picture last copied from a region comes
+  back at the region's size, any other is limited to 60 % of the page width.
 - **"Open with" / share target** (`lib/openWith.js`, started from `main.jsx`): every platform hands a PDF over differently and
   ends as plain `File`s in `store/incomingStore.js`; `App.jsx` (`IncomingFiles`) brings a signed-in user to `/` and `Library`
   takes the files like "Add PDF" (the local/sync question, then the reader) — except that **one PDF you already have is just
@@ -84,6 +107,12 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   `quarc-reader-incoming` cache and redirects to `/?shared=1`. iOS can do none of this (no file handlers in a home-screen app).
 
 ## Gotchas found the hard way
+
+- This folder is synced by **Proton Drive**: when a write races its sync it can leave `File (# Name clash <date> <id> #).ext`
+  next to the real file and an edit can seem to vanish. After a batch of edits that "succeeded" but is not there, look for such a
+  file, diff it against the real one, re-apply, delete it — and never `git add -A` with one present (it is not gitignored).
+- Browser tests: the toasts stack at the bottom centre, *outside* the reader container, and swallow clicks there (a snip test
+  clicked "on the page" and hit a toast). Click somewhere clear.
 
 - Android "open with": `BridgeActivity.load()` already calls `onNewIntent(getIntent())`, so the plugin only needs
   `handleOnNewIntent` (not `load()`); ignore intents with `FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY` (recents re-delivers the old
@@ -123,9 +152,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 114 unit tests (geometry, ink, marks, export, find, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 135 unit tests (geometry, ink, marks, export, find, snip, colour, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find pen tools library big   (214 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find dock snip pen tools library big   (262 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 

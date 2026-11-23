@@ -23,6 +23,9 @@ const DEFAULTS = {
   hlSize: 14,
   hlColor: '#ffd43b',
   snapText: true, // a pencil highlighter stroke over text becomes a real text highlight (otherwise: freehand ink)
+  penColorHistory: [], // the colours used with the pen lately, newest first (see lib/color.pushRecent)
+  hlColorHistory: [], // ...and with the highlighter
+  snipAnnotations: true, // snip tool: include my ink and highlights in the picture
   // Library
   syncChoice: 'ask', // what to do with a newly added PDF: 'ask' | 'local' | 'cloud'
   autoCache: true, // keep synced documents on this device after the first time they are opened

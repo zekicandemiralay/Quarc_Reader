@@ -9,7 +9,7 @@
     "prebuild": "node scripts/copy-pdfjs-assets.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test test/shapeRecognition.test.js test/selectionCut.test.js test/geometry.test.js test/inkBuckets.test.js test/marks.test.js test/export.test.js test/find.test.js test/i18n.test.js"
+    "test": "node --test test/shapeRecognition.test.js test/selectionCut.test.js test/geometry.test.js test/inkBuckets.test.js test/marks.test.js test/export.test.js test/find.test.js test/snip.test.js test/color.test.js test/i18n.test.js"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",

@@ -15,7 +15,7 @@ export const DARK_FILTER = 'invert(93%) hue-rotate(180deg)';
 
 const RULING = { line: '#d6e4f0', grid: '#e2e8f0', dot: '#b8c4d2' };
 
-function drawRuling(ctx, style, sx, sy, w, h, zoom, rect) {
+export function drawRuling(ctx, style, sx, sy, w, h, zoom, rect) {
   const cell = CELL_SIZE * zoom;
   if (style === 'empty' || cell < 3) return;
   ctx.save();
@@ -150,55 +150,59 @@ export function drawMarks(canvas, view, rect, layout, marksByPage, { dark, hidde
     const r = pageRect(layout, i);
     const ox = (r.x + scrollX) * zoom;
     const oy = (r.y + scrollY) * zoom;
-    for (const m of marks) {
-      ctx.save();
-      ctx.fillStyle = m.color;
-      ctx.strokeStyle = m.color;
-      for (const [x, y, w, h] of m.rects) {
-        if (m.type === 'hl') {
-          ctx.globalAlpha = dark ? 0.38 : 1;
-          ctx.fillRect(ox + x * zoom, oy + y * zoom, w * zoom, h * zoom);
-        } else {
-          ctx.globalAlpha = 1;
-          ctx.lineWidth = Math.max(1.5, 1.6 * zoom);
-          const ly = m.type === 'ul' ? y + h - 1 : y + h / 2;
-          ctx.beginPath();
-          ctx.moveTo(ox + x * zoom, oy + ly * zoom);
-          ctx.lineTo(ox + (x + w) * zoom, oy + ly * zoom);
-          ctx.stroke();
-        }
-      }
-      ctx.restore();
-      if (m.id === selectedId) {
-        const b = markBounds(m);
-        ctx.save();
-        ctx.setLineDash([5, 4]);
-        ctx.strokeStyle = '#7c3aed';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(ox + b.x * zoom - 2, oy + b.y * zoom - 2, b.w * zoom + 4, b.h * zoom + 4);
-        ctx.restore();
-      }
-      if (m.note) {
-        // A small speech-bubble marker at the end of the highlight.
-        const last = m.rects[m.rects.length - 1];
-        const bx = ox + (last[0] + last[2]) * zoom + 3;
-        const by = oy + last[1] * zoom;
-        const s = Math.max(9, Math.min(18, 11 * zoom));
-        ctx.save();
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.globalAlpha = 1;
-        ctx.fillStyle = '#f59e0b';
-        ctx.beginPath();
-        ctx.roundRect(bx, by, s, s * 0.8, 2.5);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(bx + s * 0.2, by + s * 0.8);
-        ctx.lineTo(bx + s * 0.2, by + s * 1.05);
-        ctx.lineTo(bx + s * 0.45, by + s * 0.8);
-        ctx.fill();
-        ctx.restore();
-      }
-    }
+    for (const m of marks) paintMark(ctx, m, ox, oy, zoom, { dark, selectedId });
     if (hits) drawFinds(ctx, hits, ox, oy, zoom, dark);
+  }
+}
+
+// One highlight / underline / strike-through (and the note marker on it), with the page's top-left corner at
+// (ox, oy) on the canvas and `zoom` canvas px per page-local px. Also used to draw a snipped region.
+export function paintMark(ctx, m, ox, oy, zoom, { dark = false, selectedId = null } = {}) {
+  ctx.save();
+  ctx.fillStyle = m.color;
+  ctx.strokeStyle = m.color;
+  for (const [x, y, w, h] of m.rects) {
+    if (m.type === 'hl') {
+      ctx.globalAlpha = dark ? 0.38 : 1;
+      ctx.fillRect(ox + x * zoom, oy + y * zoom, w * zoom, h * zoom);
+    } else {
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = Math.max(1.5, 1.6 * zoom);
+      const ly = m.type === 'ul' ? y + h - 1 : y + h / 2;
+      ctx.beginPath();
+      ctx.moveTo(ox + x * zoom, oy + ly * zoom);
+      ctx.lineTo(ox + (x + w) * zoom, oy + ly * zoom);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+  if (m.id === selectedId) {
+    const b = markBounds(m);
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = '#7c3aed';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(ox + b.x * zoom - 2, oy + b.y * zoom - 2, b.w * zoom + 4, b.h * zoom + 4);
+    ctx.restore();
+  }
+  if (m.note) {
+    // A small speech-bubble marker at the end of the highlight.
+    const last = m.rects[m.rects.length - 1];
+    const bx = ox + (last[0] + last[2]) * zoom + 3;
+    const by = oy + last[1] * zoom;
+    const s = Math.max(9, Math.min(18, 11 * zoom));
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#f59e0b';
+    ctx.beginPath();
+    ctx.roundRect(bx, by, s, s * 0.8, 2.5);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bx + s * 0.2, by + s * 0.8);
+    ctx.lineTo(bx + s * 0.2, by + s * 1.05);
+    ctx.lineTo(bx + s * 0.45, by + s * 0.8);
+    ctx.fill();
+    ctx.restore();
   }
 }

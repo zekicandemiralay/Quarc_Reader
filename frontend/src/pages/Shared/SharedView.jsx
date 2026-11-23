@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { BookOpen, Scroll, Library, LogIn, Link2Off, Share2, Search } from 'lucide-react';
+import { BookOpen, Scroll, Library, LogIn, Link2Off, Share2, Search, Crop } from 'lucide-react';
 import { apiUrl } from '../../lib/apiUrl';
 import { openPdf } from '../../lib/pdf';
 import { getClientId } from '../../lib/sync';
@@ -123,6 +123,15 @@ export default function SharedView() {
         </button>
         <button
           type="button"
+          title={t('snip.title')}
+          aria-label={t('snip.title')}
+          onClick={() => canvasRef.current?.openSnip()}
+          className="flex h-10 w-10 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-700/70"
+        >
+          <Crop size={20} />
+        </button>
+        <button
+          type="button"
           title={mode === 'book' ? t('reader.modeScroll') : t('reader.modeBook')}
           onClick={() => setMode(mode === 'book' ? 'scroll' : 'book')}
           className="flex h-10 w-10 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-700/70"
@@ -141,7 +150,7 @@ export default function SharedView() {
       </header>
       <div className="min-h-0 flex-1">
         {state.phase === 'ready' && pdf ? (
-          <ReaderCanvas ref={canvasRef} docId={`share-${token}`} pdf={pdf} pages={pages} annotations={annotations} readOnly mode={mode} paper={paper} initialPosition={null} />
+          <ReaderCanvas ref={canvasRef} docId={`share-${token}`} title={meta?.title} pdf={pdf} pages={pages} annotations={annotations} readOnly mode={mode} paper={paper} initialPosition={null} />
         ) : (
           <div className="flex h-full items-center justify-center">
             <div className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-300 border-t-accent" />

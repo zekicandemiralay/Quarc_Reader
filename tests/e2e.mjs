@@ -48,6 +48,8 @@ async function main() {
       ['style', scenarioStyle],
       ['openwith', scenarioOpenWith],
       ['find', scenarioFind],
+      ['dock', scenarioDock],
+      ['snip', scenarioSnip],
       ['pen', scenarioPen],
       ['tools', scenarioTools],
       ['library', scenarioLibrary],
@@ -1356,6 +1358,373 @@ async function scenarioFind(browser, state) {
     check('no page errors (long book)', errors3.length === 0, errors3.join('\n'));
     await ctx3.close();
   }
+}
+
+// ---- The dock: the eraser, colours, the colour history and the picker -----------------------------------------
+
+async function scenarioDock(browser, state) {
+  section('The dock: eraser button, colour history and picker');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const settings = () => page.evaluate(() => JSON.parse(localStorage.getItem('quarc_reader_settings') || '{}'));
+  const elements = async () => ((await dumpDb(page)).ann || []).flatMap((r) => JSON.parse(r.ink_json).elements);
+  const pressed = (testId) => page.$eval(`[data-testid="${testId}"]`, (el) => el.getAttribute('aria-pressed'));
+  const openMore = async () => {
+    await page.click('[data-testid="color-more"]');
+    await page.waitForSelector('[data-testid="color-picker"]');
+  };
+  const recent = () => page.$$eval('[data-testid="recent-color"]', (els) => els.map((e) => e.getAttribute('data-color')));
+
+  await login(page, 'kim');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+
+  // ----- the eraser is on the dock, not in the Tools flyout -----
+  check('the eraser has its own button on the dock', !!(await page.$('[data-testid="tool-eraser"]')));
+  await page.click('[data-testid="tools-menu"]');
+  await page.waitForSelector('[data-testid="tool-rectangle"]', { visible: true });
+  check('...and is no longer in the Tools flyout', (await page.$$('[data-testid="tool-eraser"]')).length === 1);
+  await page.keyboard.press('Escape');
+
+  await page.click('button[aria-label="#e03131"]');
+  await drawStroke(page, { x: box.x + 300, y: box.y + 600 }, { x: box.x + 700, y: box.y + 604 });
+  await sleep(1600);
+  check('a stroke is drawn', (await elements()).filter((e) => !e.isDeleted).length === 1);
+
+  await page.click('[data-testid="tool-eraser"]');
+  check('the eraser button turns the eraser on', (await pressed('tool-eraser')) === 'true' && (await pressed('tool-pen')) !== 'true');
+  await page.mouse.move(box.x + 500, box.y + 560);
+  await page.mouse.down();
+  for (let i = 1; i <= 8; i++) {
+    await page.mouse.move(box.x + 500, box.y + 560 + i * 10);
+    await sleep(15);
+  }
+  await page.mouse.up();
+  await sleep(1600);
+  const afterErase = await elements();
+  check('dragging it across the stroke erases it (stored as a deletion)', afterErase.filter((e) => !e.isDeleted).length === 0 && afterErase.some((e) => e.isDeleted));
+  await page.click('[data-testid="tool-eraser"]');
+  check('pressing it again goes back to the pen', (await pressed('tool-pen')) === 'true' && (await pressed('tool-eraser')) !== 'true');
+
+  // ----- colours: history, the picker, a hex code -----
+  await openMore();
+  check('the colour list opens with a picker', !!(await page.$('[data-testid="color-area"]')) && !!(await page.$('[data-testid="color-hue"]')) && !!(await page.$('[data-testid="color-hex"]')));
+  check('the colour used so far (the red of the first stroke) is in the history', (await recent()).join() === '#e03131', (await recent()).join());
+  await shot(page, '98-colour-picker');
+  await page.keyboard.press('Escape');
+
+  await page.click('button[aria-label="#1971c2"]');
+  await page.click('button[aria-label="#2f9e44"]');
+  await openMore();
+  check('colours that were used are listed, newest first', (await recent()).join() === '#2f9e44,#1971c2,#e03131', (await recent()).join());
+
+  await page.click('[data-testid="color-hex"]', { clickCount: 3 });
+  await page.keyboard.type('#12ab34');
+  await page.keyboard.press('Enter');
+  await waitUntil(async () => (await settings()).penColor === '#12ab34', { label: 'the typed colour to be used' });
+  check('a hex code that is typed becomes the pen colour', true);
+  check('...and goes to the top of the history', (await recent()).join() === '#12ab34,#2f9e44,#1971c2,#e03131', (await recent()).join());
+
+  // dragging in the square
+  const area = await page.$eval('[data-testid="color-area"]', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  await page.mouse.move(area.x + area.w * 0.8, area.y + area.h * 0.3);
+  await page.mouse.down();
+  await page.mouse.move(area.x + area.w * 0.6, area.y + area.h * 0.4, { steps: 5 });
+  await page.mouse.up();
+  const dragged = (await settings()).penColor;
+  check('dragging in the colour square picks a colour', /^#[0-9a-f]{6}$/.test(dragged) && dragged !== '#12ab34', dragged);
+  check('...which is remembered too: once, when let go (leaving the hex box does not add another)', (await recent())[0] === dragged && (await recent()).length === 5, (await recent()).join());
+
+  // the hue slider: holding an arrow key is one colour in the history, not twenty
+  const before = (await settings()).penColor;
+  await page.focus('[data-testid="color-hue"]');
+  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowRight');
+  await waitUntil(async () => (await settings()).penColor !== before, { label: 'the hue slider to change the colour' });
+  await sleep(300);
+  check('the hue slider changes the colour', true);
+  check('...as one entry in the history, however many key presses', (await recent()).length === 6 && (await recent())[1] === dragged, (await recent()).join());
+
+  // a wrong code is not a colour: back to the one in use
+  const inUse = (await settings()).penColor;
+  await page.click('[data-testid="color-hex"]', { clickCount: 3 });
+  await page.keyboard.type('zzz');
+  await page.keyboard.press('Enter');
+  check('something that is not a colour code is ignored', (await settings()).penColor === inUse && (await page.$eval('[data-testid="color-hex"]', (el) => el.value.toLowerCase())) === inUse);
+
+  // a colour from the list
+  await page.click('[data-testid="recent-color"][data-color="#1971c2"]');
+  await waitUntil(async () => (await settings()).penColor === '#1971c2', { label: 'a recent colour to be picked' });
+  check('a colour from the history can be picked again', (await recent())[0] === '#1971c2', (await recent()).join());
+  await page.keyboard.press('Escape');
+
+  // it draws with the chosen colour
+  await page.click('[data-testid="color-more"]');
+  await page.click('[data-testid="color-hex"]', { clickCount: 3 });
+  await page.keyboard.type('#12ab34');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Escape');
+  await drawStroke(page, { x: box.x + 300, y: box.y + 650 }, { x: box.x + 700, y: box.y + 654 });
+  await sleep(1600);
+  const stroke = (await elements()).filter((e) => !e.isDeleted && e.type === 'freedraw').pop();
+  check('the pen draws in the colour that was typed', stroke?.strokeColor === '#12ab34', stroke?.strokeColor);
+
+  // the history is kept
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForSelector('[data-testid="color-more"]', { timeout: 15000 }).catch(() => {});
+  await readerReady(page);
+  await openMore();
+  check('the history is still there after reopening', (await recent())[0] === '#12ab34' && (await recent()).includes('#1971c2'), (await recent()).join());
+  await page.keyboard.press('Escape');
+
+  // the highlighter has a history of its own
+  await page.click('[data-testid="tool-highlighter"]');
+  await openMore();
+  check('the highlighter has its own history (empty here, and it says so)', (await recent()).length === 0 && /colours you use will be listed here/i.test(await page.evaluate(() => document.body.innerText)), (await recent()).join());
+  await page.keyboard.press('Escape');
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// ---- Snip: copy or save a region of a page, and paste ------------------------------------------------------------
+
+async function scenarioSnip(browser, state) {
+  section('Snip a region: copy, save, copy text; paste');
+  const { mkdtempSync, readdirSync, statSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const downloads = mkdtempSync(join(tmpdir(), 'quarc-reader-snip-'));
+  const ctx = await browser.createBrowserContext();
+  await ctx.overridePermissions(BASE, ['clipboard-read', 'clipboard-write', 'clipboard-sanitized-write']);
+  const bsession = await browser.target().createCDPSession();
+  await bsession.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, browserContextId: ctx.id });
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  const ctrl = async (key) => {
+    await page.keyboard.down('Control');
+    await page.keyboard.press(key);
+    await page.keyboard.up('Control');
+  };
+  const hint = () => page.$eval('[data-testid="snip-hint"]', (el) => el.innerText).catch(() => '');
+  const regionSize = async () => {
+    const m = /(\d+) × (\d+)/.exec(await hint());
+    return m ? { w: +m[1], h: +m[2] } : null;
+  };
+  const spanBox = (text) =>
+    page.evaluate((t) => {
+      const s = [...document.querySelectorAll('.quarc-text-layer span')].find((x) => x.textContent.includes(t));
+      if (!s) return null;
+      const r = s.getBoundingClientRect();
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    }, text);
+  const drag = async (a, b, steps = 10) => {
+    await page.mouse.move(a.x, a.y);
+    await page.mouse.down();
+    await page.mouse.move(b.x, b.y, { steps });
+    await page.mouse.up();
+  };
+  // The picture on the clipboard: its size and what is in it.
+  const clipImage = () =>
+    page.evaluate(async () => {
+      const items = await navigator.clipboard.read();
+      const item = items.find((i) => i.types.includes('image/png'));
+      if (!item) return null;
+      const bmp = await createImageBitmap(await item.getType('image/png'));
+      const c = document.createElement('canvas');
+      c.width = bmp.width;
+      c.height = bmp.height;
+      const cx = c.getContext('2d');
+      cx.drawImage(bmp, 0, 0);
+      const d = cx.getImageData(0, 0, c.width, c.height).data;
+      let dark = 0;
+      let red = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i + 3] > 200 && d[i] < 90 && d[i + 1] < 90 && d[i + 2] < 90) dark++;
+        if (d[i + 3] > 200 && d[i] > 170 && d[i + 1] < 90 && d[i + 2] < 90) red++;
+      }
+      return { w: c.width, h: c.height, dark, red, corner: [...cx.getImageData(2, 2, 1, 1).data] };
+    });
+  // How dim the snip canvas is (alpha 0–255) at a point outside the region and at one inside it (client coordinates).
+  const snipPixels = (outside, inside) =>
+    page.evaluate(
+      (o, i) => {
+        const c = [...document.querySelectorAll('.quarc-canvas-page canvas')].find((x) => x.style.zIndex === '4');
+        const r = c.getBoundingClientRect();
+        const alphaAt = (p) => c.getContext('2d').getImageData(Math.round((p.x - r.left) * (c.width / r.width)), Math.round((p.y - r.top) * (c.height / r.height)), 1, 1).data[3];
+        return { outside: alphaAt(o), inside: alphaAt(i) };
+      },
+      outside,
+      inside
+    );
+  const elements = async () => ((await dumpDb(page)).ann || []).flatMap((r) => JSON.parse(r.ink_json).elements).filter((e) => !e.isDeleted);
+
+  await login(page, 'lea');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  await page.bringToFront();
+
+  // a red stroke between the heading and the first line (it is in the region) — drawn before the tool is on
+  await page.click('button[aria-label="#e03131"]');
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+
+  await page.click('[data-testid="tool-snip"]');
+  await page.waitForSelector('[data-testid="snip-bar"]');
+  check('the Snip button on the dock opens the snip bar, in place of the dock', !(await page.$('[data-testid="tool-pen"]')));
+  check('it says what to do, and nothing can be copied yet', /Drag on a page/.test(await hint()) && (await page.$eval('[data-testid="snip-copy"]', (el) => el.disabled)));
+
+  await waitUntil(async () => (await spanBox('Call me Ishmael')) && (await spanBox('Chapter 1')), { label: 'the page text to be laid out' });
+  const head = await spanBox('Chapter 1');
+  const line = await spanBox('Call me Ishmael');
+  const a = { x: Math.min(head.x, line.x) - 20, y: head.y - 12 };
+  const b = { x: line.x + line.w + 20, y: line.y + line.h + 6 };
+  await drag(a, b);
+  await waitUntil(async () => (await regionSize()) !== null, { label: 'the region size' });
+  const size1 = await regionSize();
+  check('dragging on the page chooses a region, and its size is shown', size1.w > 300 && size1.h > 60, JSON.stringify(size1));
+  check('...which enables copying', !(await page.$eval('[data-testid="snip-copy"]', (el) => el.disabled)));
+  const px = await snipPixels({ x: 60, y: b.y + 150 }, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  check('everything outside the region is dimmed, inside it is clear', px.outside > 60 && px.inside === 0, JSON.stringify(px));
+  await shot(page, '99-snip');
+
+  // ----- copy the picture with Ctrl+C -----
+  await ctrl('KeyC');
+  const first = await waitUntil(async () => (await clipImage()) || null, { timeout: 20000, label: 'the picture on the clipboard' });
+  check('Ctrl+C puts a picture of the region on the clipboard', first.w > 600 && first.h > 100, `${first.w}x${first.h}`);
+  check('...sharper than the screen (at least 2 picture pixels per page pixel)', first.w >= size1.w * 1.9, `${first.w} for ${size1.w}`);
+  check('...of the page itself: its text is in it, not the dimming', first.dark > 400 && first.corner[0] > 245 && first.corner[1] > 245 && first.corner[2] > 245, `${first.dark} dark px, corner ${first.corner}`);
+
+  // ----- annotations: the red stroke is in only when they are included -----
+  await page.click('[data-testid="snip-close"]');
+  await page.click('[data-testid="tool-pen"]');
+  await drawStroke(page, { x: (a.x + b.x) / 2 - 100, y: (head.y + head.h + line.y) / 2 }, { x: (a.x + b.x) / 2 + 100, y: (head.y + head.h + line.y) / 2 + 3 });
+  await sleep(1600);
+  check('a stroke is drawn in the region', (await elements()).length === 1);
+  await page.click('[data-testid="tool-snip"]');
+  await waitUntil(async () => !!(await spanBox('Call me Ishmael')), { label: 'the text layer again' });
+  await drag(a, b);
+  await waitUntil(async () => (await regionSize()) !== null, { label: 'the region again' });
+  await ctrl('KeyC');
+  const withInk = await waitUntil(async () => {
+    const c = await clipImage();
+    return c && c.red > 30 ? c : null;
+  }, { timeout: 20000, label: 'a picture with the ink in it' });
+  check('my ink is in the picture', withInk.red > 30, `${withInk.red} red px`);
+  check('the annotations switch is on by default', (await page.$eval('[data-testid="snip-annotations"]', (el) => el.getAttribute('aria-pressed'))) === 'true');
+  await page.click('[data-testid="snip-annotations"]');
+  await ctrl('KeyC');
+  const without = await waitUntil(async () => {
+    const c = await clipImage();
+    return c && c.red === 0 && c.dark > 400 ? c : null;
+  }, { timeout: 20000, label: 'a picture without the ink' });
+  check('switched off, the picture is the plain page', without.red === 0 && without.dark > 400);
+
+  // ----- copy text -----
+  await page.click('[data-testid="snip-text"]');
+  const text = await waitUntil(async () => {
+    const s = await page.evaluate(() => navigator.clipboard.readText());
+    return /Call me Ishmael/.test(s) ? s : null;
+  }, { timeout: 15000, label: 'the text on the clipboard' });
+  check('"Copy text" copies the words in the region, line by line', /Chapter 1\r?\nCall me Ishmael\. Some years ago/.test(text), JSON.stringify(text));
+  check('...and only those: the line below the region is left out', !/having little/.test(text));
+
+  // ----- save -----
+  await page.click('[data-testid="snip-save"]');
+  const file = await waitUntil(() => {
+    const f = readdirSync(downloads).find((n) => n.endsWith('.png') && !n.endsWith('.crdownload'));
+    return f && statSync(join(downloads, f)).size > 0 ? f : null;
+  }, { timeout: 20000, label: 'the saved picture' });
+  const fileBytes = readFileSync(join(downloads, file));
+  check('"Save image" downloads a PNG named after the document and page', fileBytes.subarray(1, 4).toString() === 'PNG' && /^Moby Dick \(test\) - page 1\.png$/.test(file), file);
+
+  // ----- resize and move -----
+  const r0 = await regionSize();
+  const midY = (a.y + b.y) / 2;
+  await drag({ x: b.x, y: midY }, { x: b.x - 250, y: midY });
+  await waitUntil(async () => ((await regionSize())?.w || 0) < r0.w - 100, { label: 'the region to get narrower' });
+  const r1 = await regionSize();
+  check('dragging a handle resizes the region', r1.w < r0.w - 100 && r1.h === r0.h, `${r0.w}x${r0.h} -> ${r1.w}x${r1.h}`);
+  await drag({ x: (a.x + b.x - 250) / 2 + 20, y: midY }, { x: (a.x + b.x - 250) / 2 + 80, y: midY + 15 });
+  const r2 = await regionSize();
+  check('dragging inside it moves it, the size stays', r2.w === r1.w && r2.h === r1.h, `${r2.w}x${r2.h}`);
+  await page.mouse.click(60, 560); // a click on the page, away from the region (and from the toasts at the bottom)
+  await waitUntil(async () => (await regionSize()) === null, { label: 'a click to clear the region' });
+  check('a plain click on the page clears the region', await page.$eval('[data-testid="snip-copy"]', (el) => el.disabled));
+  await drag(a, b);
+  await waitUntil(async () => (await regionSize()) !== null, { label: 'a new region' });
+  await drag({ x: 6, y: 300 }, { x: 8, y: 320 }, 3); // on the desk, in the margin beside the page
+  await waitUntil(async () => (await regionSize()) === null, { label: 'a press on the desk to clear the region' });
+  check('a press on the desk beside the page clears it too', true);
+
+  // ----- put a picture on the clipboard again (the text copy replaced it), then leave -----
+  await drag(a, b);
+  await waitUntil(async () => (await regionSize()) !== null, { label: 'a region to copy' });
+  const copiedSize = await regionSize();
+  await ctrl('KeyC');
+  await waitUntil(async () => (await clipImage()) !== null, { timeout: 20000, label: 'the picture on the clipboard again' });
+  await sleep(500);
+
+  // ----- Esc -----
+  await page.keyboard.press('Escape');
+  await waitUntil(async () => !(await page.$('[data-testid="snip-bar"]')), { label: 'the snip bar to close' });
+  check('Escape leaves the tool and the dock is back', !!(await page.$('[data-testid="tool-pen"]')));
+  check('...with the pen as it was', (await page.$eval('[data-testid="tool-pen"]', (el) => el.getAttribute('aria-pressed'))) === 'true');
+
+  // ----- paste: a picture, and text -----
+  const pasteEvent = (kind) =>
+    page.evaluate(async (what) => {
+      const dt = new DataTransfer();
+      if (what === 'image') {
+        const items = await navigator.clipboard.read();
+        const blob = await items.find((i) => i.types.includes('image/png')).getType('image/png');
+        dt.items.add(new File([blob], 'image.png', { type: 'image/png' }));
+      } else {
+        dt.setData('text/plain', 'Pasted note 123');
+      }
+      (document.activeElement || document.body).dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }, kind);
+  const before = (await elements()).length;
+  await page.mouse.move(box.x + 300, box.y + 640);
+  await pasteEvent('image');
+  const withPicture = await waitUntil(async () => {
+    const els = await elements();
+    return els.length > before && els.some((e) => e.type === 'image') ? els : null;
+  }, { timeout: 15000, label: 'the pasted picture to be stored' });
+  check('Ctrl+V pastes a picture from the clipboard onto the page', !!withPicture);
+  const pasted = await waitUntil(async () => {
+    const img = (await elements()).find((e) => e.type === 'image');
+    return img && Math.abs(img.width - copiedSize.w) < 4 ? img : null;
+  }, { timeout: 15000, label: 'the pasted picture to be brought to the size of the region' }).catch(async () => (await elements()).find((e) => e.type === 'image'));
+  check('...at the size of the region that was copied (not twice that)', Math.abs(pasted.width - copiedSize.w) < 4 && Math.abs(pasted.height - copiedSize.h) < 4, `${Math.round(pasted.width)}x${Math.round(pasted.height)} for ${copiedSize.w}x${copiedSize.h}; status ${pasted.status}`);
+  const files = (await dumpDb(page)).ann.map((r) => Object.keys(JSON.parse(r.ink_json).files || {})).flat();
+  check('...and the picture itself is stored with the page', files.length >= 1, files.join());
+  check('...and the select tool is on, so it can be moved at once', (await page.$eval('[data-testid="tools-menu"]', (el) => el.getAttribute('aria-pressed'))) === 'true');
+  await shot(page, '99-pasted');
+
+  await pasteEvent('text');
+  const withText = await waitUntil(async () => {
+    const els = await elements();
+    return els.find((e) => e.type === 'text' && /Pasted note 123/.test(e.text)) || null;
+  }, { timeout: 15000, label: 'the pasted text to be stored' });
+  check('Ctrl+V pastes text as a text element', !!withText);
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
 }
 
 // A stylus: pointer events with pointerType 'pen' and a pressure per sample.

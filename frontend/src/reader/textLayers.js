@@ -218,6 +218,48 @@ export class TextLayerManager {
     return { rects: merged, text: texts.map((t) => t.s).join(' ').replace(/\s+/g, ' ').trim() };
   }
 
+  // The words inside a region of a page ({ x, y, w, h }, page-local px), as text: lines top to bottom, each left to
+  // right. A line is taken when its middle is inside the region; at the region's left and right edges a word that
+  // is cut in two comes whole.
+  async textInRect(pageIndex, rect) {
+    const p = this.pages.get(pageIndex);
+    if (!p) return '';
+    await p.ready;
+    const wr = p.wrapper.getBoundingClientRect();
+    const zoom = wr.width / p.w || 1;
+    const parts = [];
+    for (const span of p.container.querySelectorAll('span')) {
+      const node = span.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE) continue;
+      const str = node.textContent;
+      if (!str.trim()) continue;
+      const sr = span.getBoundingClientRect();
+      const box = { x: (sr.left - wr.left) / zoom, y: (sr.top - wr.top) / zoom, w: sr.width / zoom, h: sr.height / zoom };
+      if (box.w < 1 || box.h < 1) continue;
+      const mid = box.y + box.h / 2;
+      if (mid < rect.y || mid > rect.y + rect.h) continue;
+      const x0 = Math.max(box.x, rect.x);
+      const x1 = Math.min(box.x + box.w, rect.x + rect.w);
+      if (x1 <= x0) continue;
+      let i0 = x0 <= box.x + 0.5 ? 0 : Math.floor(((x0 - box.x) / box.w) * str.length);
+      let i1 = x1 >= box.x + box.w - 0.5 ? str.length : Math.ceil(((x1 - box.x) / box.w) * str.length);
+      [i0, i1] = expandToWords(str, i0, i1);
+      if (i1 > i0) parts.push({ x: box.x, mid, h: box.h, s: str.slice(i0, i1) });
+    }
+    parts.sort((a, b) => a.mid - b.mid);
+    // spans whose middles are within a fraction of a line of each other are on one line
+    const lines = [];
+    for (const part of parts) {
+      const line = lines[lines.length - 1];
+      if (line && Math.abs(part.mid - line.mid) < Math.min(part.h, line.h) * 0.6) line.parts.push(part);
+      else lines.push({ mid: part.mid, h: part.h, parts: [part] });
+    }
+    return lines
+      .map((l) => l.parts.sort((a, b) => a.x - b.x).map((q) => q.s).join('').replace(/[ \t]+/g, ' ').trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
   dispose() {
     this.disposed = true;
     for (const i of [...this.pages.keys()]) this.remove(i);
