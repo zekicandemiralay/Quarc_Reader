@@ -56,8 +56,30 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   Excalidraw), text/images → Excalidraw rasterised PNG (injected), text marks → real `/Highlight|/Underline|/StrikeOut`
   annotations (+ `/Text` for notes), note pages → real pages with their ruling. Coordinates go through pdf.js'
   `viewport.convertToPdfPoint` so rotated/cropped pages work.
+- **"Open with" / share target** (`lib/openWith.js`, started from `main.jsx`): every platform hands a PDF over differently and
+  ends as plain `File`s in `store/incomingStore.js`; `App.jsx` (`IncomingFiles`) brings a signed-in user to `/` and `Library`
+  takes the files like "Add PDF" (the local/sync question, then the reader) — except that **one PDF you already have is just
+  opened** (`findDuplicate`), with no question. Signed out, the files wait in the store. Per platform:
+  *Android* `OpenWithPlugin.java` (VIEW + SEND/SEND_MULTIPLE filters in the manifest) copies the content:// stream into
+  `cache/incoming/<uuid>.pdf` off the main thread and fires `incoming`; JS calls `takePending()` (also once at start-up — the
+  plugin is idempotent), reads the copy with `fetch(Capacitor.convertFileSrc(path))` and calls `discard()`.
+  *Desktop* `main.rs`: Windows/Linux get the path as an argument (a second launch is forwarded by `tauri-plugin-single-instance`),
+  macOS via `RunEvent::Opened`; each file is added to the fs plugin's **runtime scope** (`fs_scope().allow_file`) — the capability
+  has `fs:allow-read-file` with no scope on purpose — and the page is told with `window.__quarcOpenFiles` + a `quarc-open-files`
+  event (`eval`, held back until `on_page_load` Finished); the page reads it with `__TAURI__.fs.readFile`.
+  *Installed PWA* `manifest.json` `file_handlers` → `launchQueue`, and `share_target` → `sw.js` keeps the POSTed file in the
+  `quarc-reader-incoming` cache and redirects to `/?shared=1`. iOS can do none of this (no file handlers in a home-screen app).
 
 ## Gotchas found the hard way
+
+- Android "open with": `BridgeActivity.load()` already calls `onNewIntent(getIntent())`, so the plugin only needs
+  `handleOnNewIntent` (not `load()`); ignore intents with `FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY` (recents re-delivers the old
+  launch intent) and mark handled ones, or a killed-and-restored app imports the same PDF again. A `file://` URI is refused when
+  it points into the app's own data dir. `pathPattern` in the manifest is written `.*\\.pdf` (aapt turns it into `.*\.pdf`).
+- Desktop "open with": Windows' installer registers the app as a `.pdf` handler (`fileAssociations`, `rank: Alternate` is only
+  honoured on macOS); `RunEvent::Opened` and `#[cfg(target_os = "macos")]` code can't be compiled on Windows — put the `cfg`
+  on a block, never on an `if let` statement. The window loads a remote origin, so anything native it may call must be in
+  `capabilities/default.json` (`remote.urls`).
 
 - Excalidraw's UI (main menu, Library, help) is hidden with CSS in `ReaderCanvas`; `clearCanvas` is disabled (it would wipe
   every page). Keyboard keys typed while no input has focus go to the page — **Space = page down**.
@@ -90,7 +112,7 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
 cd frontend && npm test                  # 98 unit tests (geometry, ink, marks, export, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style pen tools library big   (161 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith pen tools library big   (187 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 
@@ -100,7 +122,12 @@ services. Don't patch JS test files with shell/Python string replacement — esc
 ## Not done / next
 
 - EPUB (text highlights + typed notes via CFI); two-page spread in book mode (the page-local storage already allows a
-  different layout); text search inside a PDF; password-protected PDFs; opening a PDF from Android's file manager
-  (VIEW/SEND intent); page thumbnails/outline panel.
-- Android/desktop builds are set up (`mobile/`, `desktop/`, `.github/workflows`) but were not built on the dev machine
-  (no JDK/Android SDK; Tauri was only `cargo check`-ed) — the first tagged release is the first real build.
+  different layout); text search inside a PDF; password-protected PDFs; page thumbnails/outline panel; opening a PDF
+  *link* (http/https) from a browser in the app (the "open with" intent filters only cover content/file URIs).
+- Builds: the Android debug APK builds on the dev machine with Android Studio's JDK and SDK (`JAVA_HOME` =
+  `C:\Program Files\Android\Android Studio\jbr`, `ANDROID_HOME` = `%LOCALAPPDATA%\Android\Sdk`, then
+  `mobile\android\gradlew.bat assembleDebug`); the desktop app builds with `cargo build` (a debug build can be pointed at
+  the local test server with the `TAURI_CONFIG` env var plus a temporary capability for that origin, and driven through
+  WebView2's `--remote-debugging-port`). Release APK signing, macOS and Linux are only ever built by the release workflow.
+  The Android intent handling and the macOS "open" event were not run on a device/Mac; the rest of the open-with path
+  (desktop binary, PWA, the web half of Android) was.

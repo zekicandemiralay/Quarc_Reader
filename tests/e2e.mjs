@@ -1,6 +1,7 @@
 // Browser tests: the real backend + the production build + headless Chrome.
 // Run: npm run build (in ../frontend), then npm test (here). Screenshots go to
 // $E2E_OUT (default: the OS temp dir) so a failure can be looked at.
+import { readFileSync } from 'node:fs';
 import {
   startStack,
   stopStack,
@@ -45,6 +46,7 @@ async function main() {
       ['share', scenarioShare],
       ['reading', scenarioReading],
       ['style', scenarioStyle],
+      ['openwith', scenarioOpenWith],
       ['pen', scenarioPen],
       ['tools', scenarioTools],
       ['library', scenarioLibrary],
@@ -930,6 +932,221 @@ async function scenarioStyle(browser, state) {
 
   check('no page errors', errors.length === 0, errors.join('\n'));
   await ctx.close();
+}
+
+// ---- "Open with": a PDF that reaches the app from outside ------------------------------------------------
+// The native halves (Android's OpenWithPlugin, the desktop's main.rs) cannot run here; what runs is the web
+// half against stand-ins that behave like them, plus the parts that are really the browser's (launchQueue,
+// the service worker's share target).
+
+const IMPORT_DIALOG = 'div[class*="z-[1100]"] [role=dialog]';
+
+async function dialogUp(page) {
+  await page.waitForSelector(IMPORT_DIALOG, { timeout: 20000 });
+  return page.$eval(IMPORT_DIALOG, (el) => el.innerText);
+}
+
+async function chooseInDialog(page, label) {
+  await page.evaluate((l) => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.innerText.includes(l))?.click(), label);
+}
+
+async function scenarioOpenWith(browser, state) {
+  section('"Open with": a PDF handed to the app from outside');
+  const first = readFileSync(state.pdfPath).toString('base64');
+  const second = (await makeTestPdf({ title: 'The Whale (test)', pages: 2 })).toString('base64');
+  const titles = async (page) => ((await dumpDb(page)).docs || []).map((d) => d.title).sort();
+
+  // ----- Desktop (Tauri): main.rs sets window.__quarcOpenFiles and fires 'quarc-open-files' -----
+  {
+    const ctx = await browser.createBrowserContext();
+    const page = await ctx.newPage();
+    await lightMode(page);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    // The page the desktop app shows: the Tauri API (only the fs plugin's readFile, only for the files the
+    // app allowed) and, as at a cold start, one file already waiting when the page starts.
+    await page.evaluateOnNewDocument(
+      (pdfs) => {
+        const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        const allowed = { 'C:\\Users\\sam\\Books\\moby.pdf': pdfs.first, '/home/sam/books/whale.pdf': pdfs.second };
+        window.__tauriReads = [];
+        window.__TAURI__ = {
+          fs: {
+            readFile: async (path) => {
+              window.__tauriReads.push(path);
+              if (!allowed[path]) throw new Error(`forbidden path: ${path}`);
+              return bytes(allowed[path]);
+            },
+          },
+        };
+        if (!sessionStorage.getItem('started')) {
+          sessionStorage.setItem('started', '1');
+          window.__quarcOpenFiles = ['C:\\Users\\sam\\Books\\moby.pdf'];
+        }
+      },
+      { first, second }
+    );
+    await login(page, 'dora');
+    const text = await dialogUp(page);
+    check('a PDF the desktop app was started with waits for the sign-in, then is offered to the library', /Add 1 PDF/.test(text) && /device only/.test(text), text.slice(0, 80));
+    check('it was read through the fs plugin by the path the app gave', (await page.evaluate(() => window.__tauriReads)).join() === 'C:\\Users\\sam\\Books\\moby.pdf');
+    check('...and the hand-off list is emptied (a reload does not open it again)', (await page.evaluate(() => window.__quarcOpenFiles)).length === 0);
+    await shot(page, '90-open-with-question');
+    await chooseInDialog(page, 'device only');
+    await readerReady(page);
+    check('choosing opens it in the reader, as a device-only document', (await titles(page)).join() === 'Moby Dick (test)' && (await dumpDb(page)).docs[0].sync === 'local');
+    const firstId = await page.evaluate(() => location.pathname.split('/').pop());
+
+    // A second launch (or macOS "open") while reading: you are brought to the library and asked.
+    await page.evaluate(() => {
+      window.__quarcOpenFiles = ['/home/sam/books/whale.pdf'];
+      window.dispatchEvent(new Event('quarc-open-files'));
+    });
+    const text2 = await dialogUp(page);
+    check('a PDF opened while you are reading brings you to the library and asks about it', (await page.evaluate(() => location.pathname)) === '/' && /Add 1 PDF/.test(text2));
+    await chooseInDialog(page, 'device only');
+    await readerReady(page);
+    check('the second one opens too', (await titles(page)).join() === 'Moby Dick (test),The Whale (test)');
+
+    // One you already have is simply opened: nothing to ask.
+    await page.evaluate(() => {
+      window.__quarcOpenFiles = ['C:\\Users\\sam\\Books\\moby.pdf'];
+      window.dispatchEvent(new Event('quarc-open-files'));
+    });
+    await page.waitForFunction((id) => location.pathname === `/read/${id}`, { timeout: 20000 }, firstId);
+    check('a PDF that is already in the library opens straight away, without the question and without a copy', !(await page.$(IMPORT_DIALOG)) && (await titles(page)).length === 2);
+
+    // A path the app did not allow cannot be read: said so, nothing added.
+    await page.evaluate(() => {
+      window.__quarcOpenFiles = ['C:\\Windows\\secret.pdf'];
+      window.dispatchEvent(new Event('quarc-open-files'));
+    });
+    await waitUntil(async () => /could not be opened from the other app/.test(await page.evaluate(() => document.body.innerText)), { label: 'the failure notice' });
+    check('a file that cannot be read is reported, not silently dropped', (await titles(page)).length === 2);
+    check('no page errors', errors.length === 0, errors.join('\n'));
+    await ctx.close();
+  }
+
+  // ----- Installed PWA: the browser's file handler (manifest file_handlers → launchQueue) -----
+  {
+    const ctx = await browser.createBrowserContext();
+    const page = await ctx.newPage();
+    await lightMode(page);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(window, 'launchQueue', { configurable: true, value: { setConsumer: (fn) => (window.__launchConsumer = fn) } });
+    });
+    await login(page, 'eli');
+    check('the app registers as the launch handler for PDFs', await page.evaluate(() => typeof window.__launchConsumer === 'function'));
+    await page.evaluate(async (b64) => {
+      const file = new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'Moby.pdf', { type: 'application/pdf' });
+      await window.__launchConsumer({ files: [{ getFile: async () => file }] });
+    }, first);
+    const text = await dialogUp(page);
+    check('a PDF opened with the installed app is offered to the library', /Add 1 PDF/.test(text));
+    await chooseInDialog(page, 'device only');
+    await readerReady(page);
+    check('...and opens', (await titles(page)).join() === 'Moby Dick (test)');
+    const manifest = await (await page.goto(`${BASE}/manifest.json`)).json();
+    check('the manifest declares the PDF file handler and the share target', manifest.file_handlers?.[0]?.accept?.['application/pdf'] && manifest.share_target?.params?.files?.[0]?.name === 'pdf', JSON.stringify(manifest.share_target));
+    check('no page errors', errors.length === 0, errors.join('\n'));
+    await ctx.close();
+  }
+
+  // ----- Installed PWA: the share sheet (manifest share_target → the service worker) -----
+  {
+    const ctx = await browser.createBrowserContext();
+    const page = await ctx.newPage();
+    await lightMode(page);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await login(page, 'fay');
+    await page.waitForFunction(() => navigator.serviceWorker?.controller, { timeout: 20000 });
+    // What the system does: a real multipart POST navigation to the share target.
+    await page.evaluate((b64) => {
+      const data = new DataTransfer();
+      data.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'Shared Book.pdf', { type: 'application/pdf' }));
+      const form = Object.assign(document.createElement('form'), { method: 'POST', action: '/share-target', enctype: 'multipart/form-data' });
+      const input = Object.assign(document.createElement('input'), { type: 'file', name: 'pdf' });
+      input.files = data.files;
+      form.append(input);
+      document.body.append(form);
+      form.submit();
+    }, first);
+    const text = await dialogUp(page);
+    check('a PDF shared to the installed app comes out of the service worker and is offered to the library', /Add 1 PDF/.test(text), text.slice(0, 80));
+    check('...and the address bar is back to a plain page', !(await page.evaluate(() => location.search)));
+    check('the service worker keeps nothing once the app has it', await page.evaluate(async () => (await (await caches.open('quarc-reader-incoming')).keys()).length === 0));
+    await chooseInDialog(page, 'device only');
+    await readerReady(page);
+    check('...and it opens', (await titles(page)).join() === 'Moby Dick (test)');
+    check('no page errors', errors.length === 0, errors.join('\n'));
+    await ctx.close();
+  }
+
+  // ----- Android: the web half, against a stand-in for OpenWithPlugin.java -----
+  {
+    const ctx = await browser.createBrowserContext();
+    const page = await ctx.newPage();
+    await lightMode(page);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await login(page, 'gus'); // signed in first, so the stand-in only has to be the plugin
+    await page.evaluateOnNewDocument(
+      (pdfs) => {
+        const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        // What the plugin has copied into the app's cache; each file is served by "convertFileSrc".
+        const urls = {};
+        const copy = (path, b64) => (urls[path] = URL.createObjectURL(new Blob([bytes(b64)], { type: 'application/pdf' })));
+        copy('/data/cache/incoming/aaa.pdf', pdfs.first);
+        copy('/data/cache/incoming/bbb.pdf', pdfs.second);
+        const batches = [{ files: [{ path: '/data/cache/incoming/aaa.pdf', name: 'Moby.pdf', size: 1 }], failed: 0 }];
+        window.__discarded = [];
+        window.__plugin = {
+          queue: (batch) => batches.push(batch),
+          emit: () => window.__incoming?.(),
+        };
+        window.Capacitor = {
+          isNativePlatform: () => true,
+          convertFileSrc: (p) => urls[p] || 'about:blank',
+          Plugins: {
+            OpenWith: {
+              takePending: async () => batches.shift() || { files: [], failed: 0 },
+              discard: async ({ paths }) => window.__discarded.push(...paths),
+              addListener: (name, fn) => {
+                if (name === 'incoming') window.__incoming = fn;
+                return { remove: async () => {} };
+              },
+            },
+          },
+        };
+      },
+      { first, second }
+    );
+    await page.reload({ waitUntil: 'networkidle0' });
+    // Cold start: the plugin already has a file when the page asks.
+    const text = await dialogUp(page);
+    check('a PDF the plugin copied before the page started is offered to the library', /Add 1 PDF/.test(text), text.slice(0, 80));
+    check('the cached copy is deleted once it has been read', (await page.evaluate(() => window.__discarded)).join() === '/data/cache/incoming/aaa.pdf');
+    await chooseInDialog(page, 'device only');
+    await readerReady(page);
+    check('...and it opens', (await titles(page)).join() === 'Moby Dick (test)');
+
+    // Warm: another app shares a file (and one that could not be copied) while this one is open.
+    await page.evaluate(() => {
+      window.__plugin.queue({ files: [{ path: '/data/cache/incoming/bbb.pdf', name: 'Whale.pdf', size: 1 }], failed: 1 });
+      window.__plugin.emit();
+    });
+    const text2 = await dialogUp(page);
+    check('a PDF shared while the app is open brings you to the library and asks', (await page.evaluate(() => location.pathname)) === '/' && /Add 1 PDF/.test(text2));
+    check('a file the plugin could not copy is reported', /could not be opened from the other app/.test(await page.evaluate(() => document.body.innerText)));
+    await chooseInDialog(page, 'device only');
+    await readerReady(page);
+    check('the shared PDF opens', (await titles(page)).join() === 'Moby Dick (test),The Whale (test)');
+    check('no page errors', errors.length === 0, errors.join('\n'));
+    await ctx.close();
+  }
 }
 
 // A stylus: pointer events with pointerType 'pen' and a pressure per sample.

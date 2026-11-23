@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import useAuthStore from './store/authStore';
+import useIncoming from './store/incomingStore';
 import useSettings, { applyTheme } from './store/settingsStore';
 import { startSyncLoop } from './lib/sync';
 import Toasts from './components/Toasts';
@@ -23,6 +24,19 @@ function ProtectedRoute({ children }) {
   if (loading && !user) return <Splash />;
   if (!user) return <Navigate to="/login" replace />;
   return children;
+}
+
+// A PDF opened from outside the app (see lib/openWith.js) is added by the library: bring the person
+// there, whatever they were doing (their place and ink are saved as they go). Signed out, it waits.
+function IncomingFiles() {
+  const user = useAuthStore((s) => s.user);
+  const waiting = useIncoming((s) => s.files.length);
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    if (waiting && user && pathname !== '/') navigate('/');
+  }, [waiting, user, pathname, navigate]);
+  return null;
 }
 
 export default function App() {
@@ -76,6 +90,7 @@ export default function App() {
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <IncomingFiles />
       <Toasts />
     </>
   );

@@ -148,6 +148,8 @@
     "added": "{{count}} PDF eklendi",
     "alreadyHave": "“{{title}}” zaten kitaplığında.",
     "onlyPdf": "Yalnızca PDF dosyaları eklenebilir.",
+    "openFailed": "Bu dosya diğer uygulamadan açılamadı.",
+    "openFailed_other": "{{count}} dosya diğer uygulamadan açılamadı.",
     "importError": {
       "password": "“{{name}}” parolalı; bu henüz desteklenmiyor.",
       "invalid": "“{{name}}” PDF olarak okunamadı."

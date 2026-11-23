@@ -21,6 +21,8 @@ iOS (as a PWA).
   time; "stop syncing" removes the server copy and keeps everything on the device
 - **Offline-first sync** — everything works offline and syncs when back online; two devices drawing on the same page both keep
   every stroke. Big files go up in resumable 8 MB chunks (verified by SHA-256) and are read from the server in byte ranges
+- **Open from anywhere** — "Open with Quarc Reader" for a PDF in your file manager, mail or downloads, and **Share → Quarc Reader**
+  on Android; double-click a PDF on Windows/macOS/Linux (a PDF you already have simply opens where you left off)
 - **Share links** — send a link over Tailscale: anyone who can reach your server can read the document (no account, read-only),
   with or without your annotations, with an optional expiry, revocable any time. A Quarc user can add it to their own library
 - English and Türkçe, light / dark / system theme, Android APK, Windows/macOS/Linux desktop apps, and a PWA

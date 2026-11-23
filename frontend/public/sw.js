@@ -4,7 +4,26 @@
 //  - Built assets (/assets/*, content-hashed): cache first, they never change.
 //  - Everything else from this origin: stale-while-revalidate.
 //  - API calls are never cached (the library lives in IndexedDB for offline use).
+//  - The share target (manifest `share_target`): a PDF shared to the installed app arrives as a POST to
+//    /share-target; it is kept in the INCOMING cache and the app (lib/openWith.js) picks it up from there.
 const CACHE_NAME = 'quarc-reader-v1';
+const INCOMING = 'quarc-reader-incoming';
+
+async function receiveShared(request) {
+  try {
+    const form = await request.formData();
+    const cache = await caches.open(INCOMING);
+    let n = 0;
+    for (const file of form.getAll('pdf')) {
+      if (typeof file === 'string') continue;
+      const headers = { 'Content-Type': 'application/pdf', 'X-File-Name': encodeURIComponent(file.name || 'document.pdf') };
+      await cache.put(new Request(`/shared-file/${Date.now()}-${n++}`), new Response(file, { headers }));
+    }
+  } catch {
+    // Nothing usable arrived: the app opens anyway.
+  }
+  return Response.redirect('/?shared=1', 303);
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -19,15 +38,19 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME && k !== INCOMING).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET') return;
   const url = new URL(request.url);
+  if (request.method === 'POST' && url.origin === self.location.origin && url.pathname === '/share-target') {
+    event.respondWith(receiveShared(request));
+    return;
+  }
+  if (request.method !== 'GET') return;
   if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
   if (request.mode === 'navigate') {

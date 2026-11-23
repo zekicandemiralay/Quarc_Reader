@@ -30,6 +30,21 @@ Tick **Remember my choice** to stop being asked (change it in Settings → Libra
 document later: card menu **⋮ → Sync with my server…** or **Stop syncing (keep on this device)…**. Stopping removes the
 document from the server and from your other devices; this device keeps the file and everything you wrote.
 
+## Opening a PDF from another app
+
+You don't have to start in Quarc Reader. A PDF you open this way is added to your library exactly like **Add PDF** (you are asked
+whether it stays on this device or syncs, unless you ticked "Remember my choice"), then it opens. A PDF you already have just
+opens, where you left off.
+
+- **Android:** in a file manager, a mail app, Drive or a download notification, tap the PDF and choose **Quarc Reader** (tap
+  **Always** to make it the default), or use **Share → Quarc Reader** — one PDF or several at once.
+- **Windows / macOS / Linux:** right-click a PDF → **Open with → Quarc Reader**, or drag it onto the app. If Quarc Reader is
+  already open, the PDF opens in that window. (To make it your default PDF app, use your system's "Default apps" setting.)
+- **Installed web app (Chrome, Edge):** once you have installed Quarc Reader from the browser, it is offered under **Open with**
+  too; on Android, installed this way it also appears in the share sheet.
+- **iOS:** not possible for a web app added to the Home Screen — use **Add PDF** inside the app.
+- A PDF *link* in a browser is not handled yet: download it first, then open it from the downloads.
+
 ## Reading
 
 - **Scroll or book?** Every time you open a document the reader asks how you want to read it. **Scroll** — the pages run

@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default capability for the main window. The window shows the Quarc Reader server, so it is a remote origin and has to be listed for the app's native calls (version, update link, saving a PDF) to be allowed.",
+  "description": "Default capability for the main window. The window shows the Quarc Reader server, so it is a remote origin and has to be listed for the app's native calls (version, update link, saving a PDF, reading a PDF the app was opened with) to be allowed. fs:allow-read-file has no scope here on purpose: src/main.rs allows exactly the files the person opened with the app, at the moment they open them.",
   "windows": ["main"],
   "remote": {
     "urls": ["https://quarcnet0.tail84500c.ts.net:4008/*"]
@@ -9,6 +9,7 @@
     "core:default",
     "shell:allow-open",
     "dialog:allow-save",
-    "fs:allow-write-file"
+    "fs:allow-write-file",
+    "fs:allow-read-file"
   ]
 }

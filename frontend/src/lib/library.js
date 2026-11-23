@@ -22,6 +22,13 @@ export class ImportError extends Error {
 
 const titleFromName = (name) => name.replace(/\.pdf$/i, '').replace(/[_]+/g, ' ').trim() || 'Untitled';
 
+const findBySha = (owner, sha) => db.docs.where('owner').equals(owner).filter((d) => d.file_sha256 === sha && !d.is_deleted).first();
+
+// The document in the library that is exactly this file (same bytes), if there is one.
+export async function findDuplicate(file, owner) {
+  return findBySha(owner, await sha256Hex(await file.arrayBuffer()));
+}
+
 // Adds a PDF to the library. `sync` is the user's choice for this document:
 // 'local' keeps it on this device only, 'cloud' uploads it and syncs everything
 // about it. Resolves to { doc, duplicate }.
@@ -30,7 +37,7 @@ export async function importPdf(file, { sync: mode, owner, onStep }) {
   const buffer = await file.arrayBuffer();
   const sha = await sha256Hex(buffer);
 
-  const dup = await db.docs.where('owner').equals(owner).filter((d) => d.file_sha256 === sha && !d.is_deleted).first();
+  const dup = await findBySha(owner, sha);
   if (dup) return { doc: dup, duplicate: true };
 
   const blob = new Blob([buffer], { type: 'application/pdf' });

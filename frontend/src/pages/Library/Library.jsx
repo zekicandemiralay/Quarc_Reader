@@ -1,15 +1,16 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Plus, Search, Settings as SettingsIcon, LayoutGrid, List, Cloud, HardDrive, MoreVertical, Star, Trash2, RotateCcw, Share2, Download, CloudOff, Pencil, ArrowUpDown, CheckCircle2, X, ArrowRight, FileUp } from 'lucide-react';
 import { db } from '../../lib/db';
-import { importPdf, ImportError, trashDoc, restoreDoc, purgeDoc, updateDoc, removeOfflineCopy, cacheOffline } from '../../lib/library';
+import { importPdf, findDuplicate, ImportError, trashDoc, restoreDoc, purgeDoc, updateDoc, removeOfflineCopy, cacheOffline } from '../../lib/library';
 import { useTransfers } from '../../lib/files';
 import { useSyncStatus } from '../../lib/sync';
 import { relativeTime } from '../../lib/time';
 import useAuthStore from '../../store/authStore';
 import useSettings from '../../store/settingsStore';
+import useIncoming from '../../store/incomingStore';
 import Popover, { MenuItem, MenuSeparator } from '../../components/Popover';
 import Modal from '../../components/Modal';
 import { toast } from '../../components/Toasts';
@@ -70,9 +71,33 @@ export default function Library() {
       toast(t('library.onlyPdf'));
       return;
     }
-    if (syncChoice === 'ask') setAdding({ files });
+    // More files can arrive while the question is still open (a second "Open with"): ask once for all.
+    if (syncChoice === 'ask') setAdding((current) => ({ files: [...(current?.files || []), ...files] }));
     else runImport(files, syncChoice);
   }
+
+  // PDFs opened with this app from outside (file manager, share sheet, double-click): the same path as
+  // "Add PDF" — the local-or-sync question, then the reader — except that a PDF you already have is just
+  // opened (you are continuing to read it; there is nothing to ask).
+  async function openIncoming(files) {
+    const [only] = files;
+    if (files.length === 1 && (only.type === 'application/pdf' || /\.pdf$/i.test(only.name))) {
+      const have = await findDuplicate(only, user.id).catch(() => null);
+      if (have) {
+        navigate(`/read/${have.id}`);
+        return;
+      }
+    }
+    pickFiles(files);
+  }
+  const incoming = useIncoming((s) => s.files);
+  const takeIncoming = useIncoming((s) => s.take);
+  useEffect(() => {
+    if (!incoming.length || !user) return;
+    const files = takeIncoming(); // (empty when this effect runs twice, as in development)
+    if (files.length) openIncoming(files);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incoming, user?.id]);
 
   async function runImport(files, mode) {
     let last = null;

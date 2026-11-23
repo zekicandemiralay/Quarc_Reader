@@ -148,6 +148,8 @@
     "added": "{{count}} PDFs added",
     "alreadyHave": "“{{title}}” is already in your library.",
     "onlyPdf": "Only PDF files can be added.",
+    "openFailed": "That file could not be opened from the other app.",
+    "openFailed_other": "{{count}} files could not be opened from the other app.",
     "importError": {
       "password": "“{{name}}” is password-protected, which is not supported yet.",
       "invalid": "“{{name}}” could not be read as a PDF."

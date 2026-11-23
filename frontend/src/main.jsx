@@ -6,6 +6,10 @@ import RequiredUpdateGate from './components/RequiredUpdateGate';
 import StorePromo from './components/StorePromo';
 import './i18n';
 import './index.css';
+import { startOpenWith } from './lib/openWith';
+
+// PDFs opened with this app from outside (file manager, share sheet, double-click) start arriving now.
+startOpenWith();
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
