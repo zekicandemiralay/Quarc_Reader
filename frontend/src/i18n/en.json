@@ -70,6 +70,7 @@
       "server": "Your server had a problem sending this file. Try again in a moment.",
       "network": "The server could not be reached. Check that Tailscale is connected, then try again.",
       "unknown": "This document could not be opened.",
+      "engine": "The PDF engine could not be loaded from the server, so no PDF can be shown. Reload the page (Ctrl+F5); if it keeps happening, the app on the server needs updating.",
       "signInAgain": "Sign in again"
     },
     "errorDetails": "Details",
@@ -167,7 +168,8 @@
     "openFailed_other": "{{count}} files could not be opened from the other app.",
     "importError": {
       "password": "“{{name}}” is password-protected, which is not supported yet.",
-      "invalid": "“{{name}}” could not be read as a PDF."
+      "invalid": "“{{name}}” could not be read as a PDF.",
+      "engine": "The PDF engine could not be loaded from the server, so “{{name}}” could not be read. Reload the page (Ctrl+F5); if it keeps happening, the app on the server needs updating."
     },
     "pages": "pages",
     "continue": "Continue reading",

@@ -2,6 +2,7 @@ import { db } from './db';
 import { emit } from './events';
 import { sha256Hex, downloadBlob, fileUrl, setTransfer } from './files';
 import { openPdf, measurePages, readMeta, renderThumb } from './pdf';
+import { describeOpenError } from './pdfError';
 import { queueDocChange, queueAnn, pickSynced, removeDocLocally, syncSoon, runUploads, sync } from './sync';
 import { fileStatus } from './files';
 
@@ -47,6 +48,8 @@ export async function importPdf(file, { sync: mode, owner, onStep }) {
     opened = await openPdf({ blob });
   } catch (err) {
     if (err?.name === 'PasswordException') throw new ImportError('password', 'This PDF is password-protected.');
+    // The file may be fine: it is the PDF engine that failed to load (see lib/pdfError.js).
+    if (describeOpenError(err, { local: true }).code === 'engine') throw new ImportError('engine', 'The PDF engine could not be loaded.');
     throw new ImportError('invalid', 'This file could not be read as a PDF.');
   }
   let meta;

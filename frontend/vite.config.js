@@ -23,5 +23,17 @@ export default defineConfig({
   build: {
     // pdf.js and Excalidraw are big; one warning about it is just noise.
     chunkSizeWarningLimit: 4000,
+    rollupOptions: {
+      output: {
+        // pdf.js' worker is a module script, which browsers only run when the server calls it JavaScript. A web server
+        // that does not know the ".mjs" extension (older nginx images) serves it as a generic download and every PDF
+        // then fails to open ("Setting up fake worker failed"). So no asset keeps the ".mjs" name: same file, same hash,
+        // named ".js", which every server knows. (tests/e2e.mjs, scenario `mime`, serves the build like such a server.)
+        assetFileNames: (info) => {
+          const name = (info.names && info.names[0]) || info.name || '';
+          return /\.mjs$/i.test(name) ? 'assets/[name]-[hash].js' : 'assets/[name]-[hash][extname]';
+        },
+      },
+    },
   },
 });

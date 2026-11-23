@@ -121,6 +121,13 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 - This folder is synced by **Proton Drive**: when a write races its sync it can leave `File (# Name clash <date> <id> #).ext`
   next to the real file and an edit can seem to vanish. After a batch of edits that "succeeded" but is not there, look for such a
   file, diff it against the real one, re-apply, delete it — and never `git add -A` with one present (it is not gitignored).
+- **No asset may be named `.mjs`.** pdf.js' worker is a module script, which browsers refuse unless the server calls it JavaScript,
+  and the nginx image on the owner's server did not know `.mjs` (it sent a generic download): every PDF then failed with "Setting up
+  fake worker failed: error loading dynamically imported module …/pdf.worker.min-<hash>.mjs" — shown as "could not be opened" /
+  "could not be read as a PDF". Vite served it right, so no test saw it. `vite.config.js` (`assetFileNames`) now emits it as
+  `pdf.worker.min-<hash>.js`, `nginx.conf` has a `location ~* \.mjs$ { default_type text/javascript; }` as well, `sw.js` caches under
+  `quarc-reader-v2` (the old cache could hold the wrong-type response for good — `/assets/` is cache-first), and
+  `describeOpenError` reports this as `engine`. Browser scenario `mime` serves `dist/` like such a server (`.mjs` → octet-stream).
 - Proton Drive can also rename a *build folder* mid-build: `frontend/dist/assets` became `assets (# Name clash … #)` and the
   test app then 404'd its main script (blank page, "no Username input"). Rebuild and check `ls frontend/dist/assets` before running the
   browser tests.
@@ -165,9 +172,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 152 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 153 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find errors awake dock snip pen tools library big   (280 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools library big   (284 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 

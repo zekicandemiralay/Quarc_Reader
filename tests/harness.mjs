@@ -17,7 +17,7 @@ mkdirSync(OUT, { recursive: true });
 
 // Unusual ports on purpose: a developer's own quarc-auth / dev servers usually sit on
 // 3902, 3908 and 4173, and the tests must never collide with (or kill) those.
-const PORTS = {
+export const PORTS = {
   auth: Number(process.env.E2E_AUTH_PORT || 39902),
   backend: Number(process.env.E2E_BACKEND_PORT || 39908),
   web: Number(process.env.E2E_WEB_PORT || 44173),

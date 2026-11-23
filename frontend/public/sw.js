@@ -6,7 +6,9 @@
 //  - API calls are never cached (the library lives in IndexedDB for offline use).
 //  - The share target (manifest `share_target`): a PDF shared to the installed app arrives as a POST to
 //    /share-target; it is kept in the INCOMING cache and the app (lib/openWith.js) picks it up from there.
-const CACHE_NAME = 'quarc-reader-v1';
+// v2: /assets/ is cached for good, and a response a misconfigured server had sent with the wrong type (pdf.js' worker as a
+// generic download) would have stayed broken; a new name drops every old cache when this worker takes over.
+const CACHE_NAME = 'quarc-reader-v2';
 const INCOMING = 'quarc-reader-incoming';
 
 async function receiveShared(request) {

@@ -70,6 +70,7 @@
       "server": "Sunucunda bu dosya gönderilirken bir sorun oldu. Biraz sonra tekrar dene.",
       "network": "Sunucuya ulaşılamadı. Tailscale'in bağlı olduğunu kontrol et, sonra tekrar dene.",
       "unknown": "Bu belge açılamadı.",
+      "engine": "PDF motoru sunucudan yüklenemedi, bu yüzden hiçbir PDF gösterilemiyor. Sayfayı yenile (Ctrl+F5); sürerse sunucudaki uygulamanın güncellenmesi gerekir.",
       "signInAgain": "Yeniden giriş yap"
     },
     "errorDetails": "Ayrıntılar",
@@ -167,7 +168,8 @@
     "openFailed_other": "{{count}} dosya diğer uygulamadan açılamadı.",
     "importError": {
       "password": "“{{name}}” parolalı; bu henüz desteklenmiyor.",
-      "invalid": "“{{name}}” PDF olarak okunamadı."
+      "invalid": "“{{name}}” PDF olarak okunamadı.",
+      "engine": "PDF motoru sunucudan yüklenemedi, bu yüzden “{{name}}” okunamadı. Sayfayı yenile (Ctrl+F5); sürerse sunucudaki uygulamanın güncellenmesi gerekir."
     },
     "pages": "sayfa",
     "continue": "Okumaya devam et",

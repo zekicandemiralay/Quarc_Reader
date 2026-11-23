@@ -4,6 +4,8 @@
 // from this device rather than the server; `online` is navigator.onLine. Resolves to { code, detail }:
 //
 //   password       the PDF is password-protected
+//   engine         the PDF engine (pdf.js' worker script) could not be loaded from the server — nothing to do with the file;
+//                  typically a web server sending ".mjs" files with the wrong type, or a stale cached copy of the app
 //   invalid-local  the copy kept on this device is damaged (or was never a PDF)
 //   signin         the server said 401/403: the sign-in has expired
 //   gone           the server has no such file (404)
@@ -20,9 +22,12 @@ export function describeOpenError(err, { local = false, online = true } = {}) {
     .join(' · ')
     .slice(0, 300);
   const damaged = name === 'InvalidPDFException' || name === 'FormatError';
+  // pdf.js falls back to running its worker on the page when the real one will not load, and says so when that fails too.
+  const engineDown = /Setting up fake worker failed|dynamically imported module|module script failed|Failed to load module script/i.test(String(err?.message || ''));
 
   let code;
   if (name === 'PasswordException') code = 'password';
+  else if (engineDown) code = 'engine';
   else if (local) code = damaged ? 'invalid-local' : 'unknown';
   else if (status === 401 || status === 403) code = 'signin';
   else if (status === 404 || name === 'MissingPDFException') code = 'gone';

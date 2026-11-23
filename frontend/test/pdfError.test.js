@@ -38,6 +38,18 @@ test('a bad copy on this device is not blamed on the server', () => {
   assert.equal(describeOpenError(ex('Error'), { local: true }).code, 'unknown');
 });
 
+test('the PDF engine failing to load is not blamed on the file, wherever it came from', () => {
+  const real = ex('Error', {
+    message: 'Setting up fake worker failed: "error loading dynamically imported module: https://example.ts.net:4008/assets/pdf.worker.min-rsCePomN.mjs".',
+  });
+  assert.equal(describeOpenError(real).code, 'engine');
+  assert.equal(describeOpenError(real, { local: true }).code, 'engine');
+  assert.equal(describeOpenError(real, { online: false }).code, 'engine');
+  assert.match(describeOpenError(real).detail, /fake worker/);
+  assert.equal(describeOpenError(ex('Error', { message: 'Failed to fetch dynamically imported module: x.mjs' })).code, 'engine');
+  assert.equal(describeOpenError(ex('Error', { message: 'Failed to load module script: Expected a JavaScript module' })).code, 'engine');
+});
+
 test('something that came from the server and is not a PDF is "invalid"', () => {
   assert.equal(describeOpenError(ex('InvalidPDFException')).code, 'invalid');
 });

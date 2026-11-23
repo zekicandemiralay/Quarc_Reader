@@ -44,7 +44,7 @@ import ReadingStyleDialog from '../../components/ReadingStyleDialog';
 
 const PROGRESS_DELAY_MS = 2500;
 // Errors where trying again can help (the server may be back, the upload may have finished).
-const RETRYABLE = ['offline', 'not-ready', 'network', 'server', 'gone', 'unknown'];
+const RETRYABLE = ['offline', 'not-ready', 'network', 'server', 'gone', 'engine', 'unknown'];
 
 // One reader per document: opening another document starts from scratch (a fresh "how do you want to read?").
 export default function ReaderRoute() {

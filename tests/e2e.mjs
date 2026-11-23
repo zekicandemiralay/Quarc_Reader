@@ -7,6 +7,8 @@ import {
   stopStack,
   launch,
   BASE,
+  ROOT,
+  PORTS,
   check,
   section,
   summary,
@@ -49,6 +51,7 @@ async function main() {
       ['style', scenarioStyle],
       ['openwith', scenarioOpenWith],
       ['find', scenarioFind],
+      ['mime', scenarioMime],
       ['errors', scenarioErrors],
       ['awake', scenarioAwake],
       ['dock', scenarioDock],
@@ -1360,6 +1363,64 @@ async function scenarioFind(browser, state) {
     check('a word on every page is counted: 300 hits', true);
     check('no page errors (long book)', errors3.length === 0, errors3.join('\n'));
     await ctx3.close();
+  }
+}
+
+// ---- A web server that does not know ".mjs" ----------------------------------------------------------------------
+
+// pdf.js' worker is a module script; a server that sends ".mjs" files as a generic download (older nginx images) makes the
+// browser refuse it and EVERY PDF then fails to open. This serves the production build the way such a server does.
+async function scenarioMime(browser, state) {
+  section('A web server that serves ".mjs" as a generic download (older nginx): PDFs still open');
+  const http = await import('node:http');
+  const { readFileSync, existsSync, statSync, readdirSync } = await import('node:fs');
+  const { join, extname } = await import('node:path');
+  const dist = join(ROOT, 'frontend', 'dist');
+  const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml', '.ttf': 'font/ttf' };
+  const mimeOf = (p) => MIME[extname(p).toLowerCase()] || 'application/octet-stream'; // ".mjs" is not in the table
+  const proxy = (req, res, port) => {
+    const up = http.request({ host: '127.0.0.1', port, path: req.url, method: req.method, headers: req.headers }, (r) => {
+      res.writeHead(r.statusCode, r.headers);
+      r.pipe(res);
+    });
+    up.on('error', () => {
+      res.writeHead(502);
+      res.end();
+    });
+    req.pipe(up);
+  };
+  const server = http.createServer((req, res) => {
+    if (req.url.startsWith('/api/auth/')) return proxy(req, res, PORTS.auth);
+    if (req.url.startsWith('/api/')) return proxy(req, res, PORTS.backend);
+    let file = join(dist, decodeURIComponent(req.url.split('?')[0]));
+    if (!existsSync(file) || statSync(file).isDirectory()) file = join(dist, 'index.html');
+    res.writeHead(200, { 'Content-Type': mimeOf(file) });
+    res.end(readFileSync(file));
+  });
+  const port = PORTS.web + 7;
+  await new Promise((resolve) => server.listen(port, resolve));
+  const ctx = await browser.createBrowserContext();
+  try {
+    const mjs = readdirSync(join(dist, 'assets')).filter((n) => /\.mjs$/i.test(n));
+    check('no asset of the build keeps the ".mjs" name (the PDF worker is ".js")', mjs.length === 0 && readdirSync(join(dist, 'assets')).some((n) => /^pdf\.worker.*\.js$/.test(n)), mjs.join());
+
+    const page = await ctx.newPage();
+    await testDefaults(page);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const B = `http://localhost:${port}`;
+    await page.goto(`${B}/login`, { waitUntil: 'networkidle0' });
+    await page.type('input[placeholder="Username"]', 'mimi');
+    await page.type('input[placeholder="Password"]', 'pw');
+    await Promise.all([page.waitForFunction(() => location.pathname === '/', { timeout: 15000 }), page.click('button[type=submit]')]);
+    await chooseOnImport(page, state.pdfPath, 'device only');
+    await readerReady(page);
+    check('adding a PDF and reading it works through such a server', true);
+    check('...and the page is drawn (the PDF engine did load)', ((await paperStats(page))?.dark || 0) > 500);
+    check('no page errors', errors.length === 0, errors.join('\n'));
+  } finally {
+    await ctx.close();
+    server.close();
   }
 }
 
