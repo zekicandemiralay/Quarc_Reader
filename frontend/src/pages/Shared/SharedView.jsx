@@ -22,7 +22,9 @@ export default function SharedView() {
   const isDark = useSettings((s) => s.isDark);
   const paperMode = useSettings((s) => s.paperMode);
   const readMode = useSettings((s) => s.readMode);
-  const updatePrefs = useSettings((s) => s.update);
+  // A shared link never asks: it opens in your usual style (scroll when you usually get asked),
+  // and the button in the bar switches it for this visit only.
+  const [mode, setMode] = useState(readMode === 'book' ? 'book' : 'scroll');
   const [state, setState] = useState({ phase: 'loading' });
   const [pdf, setPdf] = useState(null);
   const [adding, setAdding] = useState(false);
@@ -86,25 +88,24 @@ export default function SharedView() {
 
   if (state.phase === 'error') {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+      <div className="flex h-full flex-col items-center justify-center gap-4 bg-neutral-50 p-6 text-center dark:bg-neutral-950">
         <Link2Off size={44} className="text-neutral-400" />
-        <p className="max-w-sm text-neutral-600 dark:text-neutral-300">{state.message}</p>
-        <Link to="/" className="rounded-lg bg-accent px-4 py-2 text-white">
+        <p className="max-w-sm font-serif text-lg text-neutral-600 dark:text-neutral-300">{state.message}</p>
+        <Link to="/" className="rounded-full bg-accent px-5 py-2.5 font-medium text-white shadow-soft hover:bg-accent-dark">
           {t('shared.openApp')}
         </Link>
       </div>
     );
   }
 
-  const mode = readMode;
   const paper = resolvePaper(paperMode, isDark);
 
   return (
     <div className="flex h-full flex-col bg-neutral-100 dark:bg-neutral-950">
-      <header className="flex items-center gap-2 border-b border-neutral-200 bg-white/95 px-3 py-1.5 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
-        <img src="/logo.png" alt="" className="h-7 w-7 rounded-lg" />
+      <header className="glass z-10 flex items-center gap-2.5 border-b border-neutral-200/70 px-3 py-2 dark:border-neutral-800">
+        <img src="/logo.png" alt="" className="h-8 w-8 rounded-xl shadow-soft" />
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-sm font-semibold">{meta?.title || '…'}</h1>
+          <h1 className="truncate font-serif text-base font-semibold leading-tight">{meta?.title || '…'}</h1>
           <p className="flex items-center gap-1 truncate text-xs text-neutral-500">
             <Share2 size={11} /> {t('shared.sharedWithYou')}
             {meta?.author ? ` · ${meta.author}` : ''}
@@ -114,17 +115,17 @@ export default function SharedView() {
         <button
           type="button"
           title={mode === 'book' ? t('reader.modeScroll') : t('reader.modeBook')}
-          onClick={() => updatePrefs({ readMode: mode === 'book' ? 'scroll' : 'book' })}
-          className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-200/70 dark:text-neutral-300 dark:hover:bg-neutral-700/70"
+          onClick={() => setMode(mode === 'book' ? 'scroll' : 'book')}
+          className="flex h-10 w-10 items-center justify-center rounded-full text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-700/70"
         >
           {mode === 'book' ? <BookOpen size={20} /> : <Scroll size={20} />}
         </button>
         {user ? (
-          <button type="button" disabled={adding || state.phase !== 'ready'} onClick={addToLibrary} className="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent-dark disabled:opacity-50">
+          <button type="button" disabled={adding || state.phase !== 'ready'} onClick={addToLibrary} className="flex h-10 items-center gap-1.5 rounded-full bg-accent px-4 text-sm font-medium text-white shadow-soft hover:bg-accent-dark disabled:opacity-50">
             <Library size={16} /> <span className="hidden sm:inline">{t('shared.addToLibrary')}</span>
           </button>
         ) : (
-          <Link to="/login" className="flex h-9 items-center gap-1.5 rounded-lg border border-neutral-300 px-3 text-sm hover:bg-neutral-100 dark:border-neutral-600 dark:hover:bg-neutral-800">
+          <Link to="/login" className="flex h-10 items-center gap-1.5 rounded-full border border-neutral-300 px-4 text-sm hover:bg-neutral-100 dark:border-neutral-600 dark:hover:bg-neutral-800">
             <LogIn size={16} /> <span className="hidden sm:inline">{t('shared.signInToAdd')}</span>
           </Link>
         )}

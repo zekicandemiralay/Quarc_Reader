@@ -8,7 +8,7 @@ import {
   Scroll,
   Bookmark,
   BookmarkCheck,
-  List,
+  NotebookPen,
   MoreVertical,
   Share2,
   FilePlus2,
@@ -16,10 +16,11 @@ import {
   Cloud,
   HardDrive,
   Download,
-  Palette,
+  SlidersHorizontal,
   X,
   FileDown,
   CloudOff,
+  Quote,
 } from 'lucide-react';
 import { db } from '../../lib/db';
 import { on } from '../../lib/events';
@@ -36,18 +37,23 @@ import { activeMarks } from '../../reader/marks';
 import ShareDialog from '../../components/ShareDialog';
 import ExportDialog from '../../components/ExportDialog';
 import SyncModeDialog from '../../components/SyncModeDialog';
+import ReadingStyleDialog from '../../components/ReadingStyleDialog';
 
 const PROGRESS_DELAY_MS = 2500;
 
-export default function Reader() {
+// One reader per document: opening another document starts from scratch (a fresh "how do you want to read?").
+export default function ReaderRoute() {
   const { id } = useParams();
+  return <Reader key={id} id={id} />;
+}
+
+function Reader({ id }) {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
   const isDark = useSettings((s) => s.isDark);
   const paperMode = useSettings((s) => s.paperMode);
   const readMode = useSettings((s) => s.readMode);
-  const autoCache = useSettings((s) => s.autoCache);
   const updatePrefs = useSettings((s) => s.update);
   const syncState = useSyncStatus((s) => s.state);
 
@@ -61,14 +67,17 @@ export default function Reader() {
   const [dialog, setDialog] = useState(null); // 'share' | 'export' | 'sync'
   const [marksVersion, setMarksVersion] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [progressPct, setProgressPct] = useState(null);
+  const [sessionMode, setSessionMode] = useState(null); // chosen for this opening of the document
   const canvasRef = useRef(null);
   const progressTimer = useRef(null);
   const menuBtn = useRef(null);
   const viewBtn = useRef(null);
-  const noteBtn = useRef(null);
   const [menu, setMenu] = useState(null); // 'more' | 'view' | 'note'
 
-  const mode = doc?.settings?.mode || readMode;
+  // How to read it: this opening's choice, else the default from Settings. With the default
+  // "ask" there is no mode until the person picks one (the dialog below).
+  const mode = sessionMode ?? (readMode === 'ask' ? null : readMode);
   const paper = resolvePaper(doc?.settings?.paper || paperMode, isDark);
 
   // ----- open the document -----------------------------------------------------------
@@ -102,6 +111,7 @@ export default function Reader() {
       }
       setAnnotations(rows);
       setStartPos(doc.progress ? { page: doc.progress.page, offset: doc.progress.offset } : null);
+      setProgressPct(doc.progress?.pct ?? 0);
       setPdf(opened.pdf);
       setStatus({ phase: 'ready' });
       markOpened(doc.id);
@@ -137,6 +147,7 @@ export default function Reader() {
 
   const onPosition = useCallback(
     (pos) => {
+      setProgressPct(pos.pct);
       clearTimeout(progressTimer.current);
       progressTimer.current = setTimeout(() => saveProgress(id, pos), PROGRESS_DELAY_MS);
     },
@@ -147,6 +158,14 @@ export default function Reader() {
       clearTimeout(progressTimer.current);
     },
     []
+  );
+
+  const onPageChange = useCallback(
+    (i) => {
+      setCurrentIndex(i);
+      if (pages.length > 1) setProgressPct(i / (pages.length - 1));
+    },
+    [pages.length]
   );
 
   // Another device changed pages that are open here: merge them in.
@@ -238,6 +257,7 @@ export default function Reader() {
 
   // ----- UI -------------------------------------------------------------------------------------------------
 
+  // Paper is chosen per document (the default lives in Settings).
   function setDocSetting(patch) {
     updateDoc(id, { settings: { ...(doc.settings || {}), ...patch } });
   }
@@ -245,10 +265,8 @@ export default function Reader() {
   if (doc === null) {
     return (
       <Centered>
-        <p className="text-neutral-500">{t('reader.notFound')}</p>
-        <button className="rounded-lg bg-accent px-4 py-2 text-white" onClick={() => navigate('/')}>
-          {t('reader.backToLibrary')}
-        </button>
+        <p className="font-serif text-xl text-neutral-600 dark:text-neutral-300">{t('reader.notFound')}</p>
+        <PrimaryButton onClick={() => navigate('/')}>{t('reader.backToLibrary')}</PrimaryButton>
       </Centered>
     );
   }
@@ -257,14 +275,14 @@ export default function Reader() {
   if (status.phase === 'error') {
     return (
       <Centered>
-        <CloudOff size={40} className="text-neutral-400" />
-        <p className="max-w-sm text-center text-neutral-600 dark:text-neutral-300">{t(`reader.error.${status.code}`)}</p>
+        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-neutral-100 text-neutral-400 dark:bg-neutral-800">
+          <CloudOff size={36} />
+        </div>
+        <p className="max-w-sm text-center font-serif text-lg text-neutral-700 dark:text-neutral-200">{t(`reader.error.${status.code}`)}</p>
         <div className="flex gap-2">
-          <button className="rounded-lg bg-accent px-4 py-2 text-white" onClick={() => navigate('/')}>
-            {t('reader.backToLibrary')}
-          </button>
+          <PrimaryButton onClick={() => navigate('/')}>{t('reader.backToLibrary')}</PrimaryButton>
           {status.code === 'offline' || status.code === 'not-ready' ? (
-            <button className="rounded-lg border border-neutral-300 px-4 py-2 dark:border-neutral-600" onClick={() => setStatus({ phase: 'loading' }) || window.location.reload()}>
+            <button className="rounded-full border border-neutral-300 px-5 py-2 text-sm hover:bg-neutral-100 dark:border-neutral-600 dark:hover:bg-neutral-800" onClick={() => window.location.reload()}>
               {t('common.retry')}
             </button>
           ) : null}
@@ -274,28 +292,31 @@ export default function Reader() {
   }
 
   const ready = status.phase === 'ready' && pdf && annotations;
+  const asking = mode === null;
   const isNotePage = pages[currentIndex]?.kind === 'note';
 
   return (
     <div className="flex h-full flex-col bg-neutral-100 dark:bg-neutral-950">
-      {chrome && (
-        <header className="flex items-center gap-1 border-b border-neutral-200 bg-white/95 px-2 py-1.5 backdrop-blur dark:border-neutral-800 dark:bg-neutral-900/95">
+      {chrome && !asking && (
+        <header className="glass relative z-10 flex items-center gap-0.5 border-b border-neutral-200/70 px-2 py-1.5 dark:border-neutral-800">
           <IconButton title={t('reader.backToLibrary')} onClick={() => navigate('/')}>
             <ArrowLeft size={20} />
           </IconButton>
-          <div className="min-w-0 flex-1 px-1">
-            <h1 className="truncate text-sm font-semibold">{doc.title}</h1>
-            <p className="flex items-center gap-1 truncate text-xs text-neutral-500">
-              {doc.sync === 'cloud' ? <Cloud size={12} /> : <HardDrive size={12} />}
-              {doc.sync === 'cloud' ? (syncState === 'offline' ? t('sync.offline') : doc.file_ready ? t('sync.synced') : t('sync.uploading')) : t('sync.localOnly')}
-              {doc.author ? ` · ${doc.author}` : ''}
+          <div className="min-w-0 flex-1 px-2">
+            <h1 className="truncate font-serif text-[15px] font-semibold leading-tight">{doc.title}</h1>
+            <p className="flex items-center gap-1.5 truncate text-xs text-neutral-500">
+              {doc.sync === 'cloud' ? <Cloud size={12} className="shrink-0" /> : <HardDrive size={12} className="shrink-0" />}
+              <span className="truncate">
+                {doc.sync === 'cloud' ? (syncState === 'offline' ? t('sync.offline') : doc.file_ready ? t('sync.synced') : t('sync.uploading')) : t('sync.localOnly')}
+                {doc.author ? ` · ${doc.author}` : ''}
+              </span>
             </p>
           </div>
           <IconButton title={hereBookmark ? t('reader.removeBookmark') : t('reader.addBookmark')} onClick={toggleBookmark} active={!!hereBookmark}>
             {hereBookmark ? <BookmarkCheck size={20} /> : <Bookmark size={20} />}
           </IconButton>
           <IconButton title={t('reader.notesAndHighlights')} onClick={() => setPanel((p) => (p ? null : 'notes'))} active={panel === 'notes'}>
-            <List size={20} />
+            <NotebookPen size={20} />
           </IconButton>
           <span ref={viewBtn}>
             <IconButton title={t('reader.view')} onClick={() => setMenu(menu === 'view' ? null : 'view')} active={menu === 'view'}>
@@ -307,11 +328,15 @@ export default function Reader() {
               <MoreVertical size={20} />
             </IconButton>
           </span>
+          {/* how far through the book: a thin line along the bottom edge of the bar */}
+          <div className="pointer-events-none absolute inset-x-0 -bottom-px h-[3px] bg-transparent">
+            <div data-testid="read-progress" className="h-full rounded-r-full bg-accent transition-[width] duration-500" style={{ width: `${Math.round((progressPct || 0) * 100)}%` }} />
+          </div>
         </header>
       )}
 
       <div className="relative min-h-0 flex-1">
-        {ready ? (
+        {ready && !asking ? (
           <ReaderCanvas
             key={`${doc.id}`}
             ref={canvasRef}
@@ -324,36 +349,46 @@ export default function Reader() {
             initialPosition={startPos}
             onSavePage={onSavePage}
             onPosition={onPosition}
-            onPageChange={setCurrentIndex}
+            onPageChange={onPageChange}
             onMarksChange={() => setMarksVersion((v) => v + 1)}
             chrome={chrome}
             onToggleChrome={() => setChrome((c) => !c)}
           />
-        ) : (
+        ) : !asking ? (
           <Centered>
             <Spinner />
             <p className="text-sm text-neutral-500">{t('reader.opening')}</p>
           </Centered>
+        ) : null}
+
+        {asking && (
+          <ReadingStyleDialog
+            doc={doc}
+            onBack={() => navigate('/')}
+            onChoose={(choice, remember) => {
+              setSessionMode(choice);
+              if (remember) updatePrefs({ readMode: choice });
+            }}
+          />
         )}
 
-
         {panel === 'notes' && (
-          <aside className="absolute inset-y-0 right-0 z-[6] flex w-full max-w-sm flex-col border-l border-neutral-200 bg-white shadow-2xl dark:border-neutral-800 dark:bg-neutral-900">
-            <div className="flex items-center justify-between border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
-              <h2 className="font-semibold">{t('reader.notesAndHighlights')}</h2>
+          <aside className="absolute inset-y-0 right-0 z-[6] flex w-full max-w-sm flex-col rounded-l-3xl border-l border-neutral-200/70 bg-surface shadow-float dark:border-neutral-800 dark:bg-neutral-900">
+            <div className="flex items-center justify-between px-5 pb-2 pt-4">
+              <h2 className="font-serif text-xl font-semibold">{t('reader.notesAndHighlights')}</h2>
               <IconButton title={t('common.close')} onClick={() => setPanel(null)}>
                 <X size={18} />
               </IconButton>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
               {bookmarks.length > 0 && (
-                <section className="mb-3">
-                  <h3 className="px-1 pb-1 text-xs font-medium uppercase tracking-wide text-neutral-400">{t('reader.bookmarks')}</h3>
+                <section className="mb-4">
+                  <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-widest text-neutral-400">{t('reader.bookmarks')}</h3>
                   {bookmarks.map((b) => {
                     const i = pages.findIndex((p) => p.key === b.page_key);
                     return (
-                      <button key={b.id} className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-neutral-100 dark:hover:bg-neutral-800" onClick={() => openBookmark(b)}>
-                        <Bookmark size={16} className="shrink-0 text-accent" />
+                      <button key={b.id} className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-800" onClick={() => openBookmark(b)}>
+                        <Bookmark size={16} className="shrink-0 fill-accent/20 text-accent" />
                         <span className="min-w-0 flex-1 truncate text-sm">{i >= 0 ? t('reader.pageN', { n: i + 1 }) : b.label}</span>
                       </button>
                     );
@@ -361,29 +396,29 @@ export default function Reader() {
                 </section>
               )}
               <section>
-                <h3 className="px-1 pb-1 text-xs font-medium uppercase tracking-wide text-neutral-400">{t('reader.highlights')}</h3>
-                {marksList.length === 0 && <p className="px-2 py-6 text-center text-sm text-neutral-400">{t('reader.noHighlights')}</p>}
+                <h3 className="px-2 pb-1 text-[11px] font-semibold uppercase tracking-widest text-neutral-400">{t('reader.highlights')}</h3>
+                {marksList.length === 0 && (
+                  <div className="flex flex-col items-center gap-2 px-6 py-10 text-center text-neutral-400">
+                    <Quote size={28} />
+                    <p className="text-sm">{t('reader.noHighlights')}</p>
+                  </div>
+                )}
                 {marksList.map(({ pageKey, pageIndex, mark }) => (
-                  <div key={mark.id} className="group rounded-lg px-2 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-800">
+                  <div key={mark.id} className="group mb-1.5 rounded-2xl border-l-4 bg-neutral-50 px-3 py-2.5 hover:bg-neutral-100 dark:bg-neutral-800/60 dark:hover:bg-neutral-800" style={{ borderLeftColor: mark.color }}>
                     <button
-                      className="flex w-full items-start gap-2 text-left"
+                      className="flex w-full items-start text-left"
                       onClick={() => {
                         canvasRef.current?.revealMark(pageKey, mark);
                         if (window.innerWidth < 640) setPanel(null);
                       }}
                     >
-                      <span className="mt-1 h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: mark.color }} />
                       <span className="min-w-0 flex-1">
-                        <span className="line-clamp-3 text-sm">{mark.text || t('reader.freehand')}</span>
-                        {mark.note && <span className="mt-1 block rounded bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">{mark.note}</span>}
-                        <span className="mt-0.5 block text-xs text-neutral-400">{t('reader.pageN', { n: pageIndex + 1 })}</span>
+                        <span className="line-clamp-3 font-serif text-[15px] leading-snug">{mark.text || t('reader.freehand')}</span>
+                        {mark.note && <span className="mt-1.5 block rounded-xl bg-accent-soft px-2.5 py-1.5 text-xs text-accent-dark dark:bg-accent/20 dark:text-accent-ring">{mark.note}</span>}
+                        <span className="mt-1 block text-xs text-neutral-400">{t('reader.pageN', { n: pageIndex + 1 })}</span>
                       </span>
                     </button>
-                    <button
-                      title={t('common.delete')}
-                      className="mt-1 hidden text-xs text-red-500 group-hover:inline"
-                      onClick={() => canvasRef.current?.removeMark(pageKey, mark.id)}
-                    >
+                    <button title={t('common.delete')} className="mt-1 hidden text-xs text-red-500 group-hover:inline" onClick={() => canvasRef.current?.removeMark(pageKey, mark.id)}>
                       {t('common.delete')}
                     </button>
                   </div>
@@ -394,37 +429,33 @@ export default function Reader() {
         )}
       </div>
 
-      <Popover anchorRef={viewBtn} open={menu === 'view'} onClose={() => setMenu(null)} align="end" className="w-64 p-3">
-        <div className="mb-1.5 text-xs font-medium text-neutral-400">{t('reader.readingMode')}</div>
+      <Popover anchorRef={viewBtn} open={menu === 'view'} onClose={() => setMenu(null)} align="end" className="w-72 p-4">
+        <div className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-neutral-400">{t('reader.readingMode')}</div>
         <Choice
           options={[
             ['scroll', t('reader.modeScroll'), Scroll],
             ['book', t('reader.modeBook'), BookOpen],
           ]}
           value={mode}
-          onChange={(v) => {
-            setDocSetting({ mode: v });
-            updatePrefs({ readMode: v });
-          }}
+          onChange={(v) => setSessionMode(v)}
         />
-        <div className="mb-1.5 mt-3 text-xs font-medium text-neutral-400">{t('reader.paper')}</div>
+        <p className="mt-1.5 text-xs text-neutral-400">{t('reader.modeHint')}</p>
+        <div className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-widest text-neutral-400">{t('reader.paper')}</div>
         <Choice
           options={[
-            ['auto', t('reader.paperAuto')],
-            ['white', t('reader.paperWhite')],
             ['sepia', t('reader.paperSepia')],
+            ['white', t('reader.paperWhite')],
             ['dark', t('reader.paperDark')],
+            ['auto', t('reader.paperAuto')],
           ]}
           value={doc.settings?.paper || paperMode}
-          onChange={(v) => {
-            setDocSetting({ paper: v });
-            updatePrefs({ paperMode: v });
-          }}
+          onChange={(v) => setDocSetting({ paper: v })}
           cols={2}
         />
+        <p className="mt-1.5 text-xs text-neutral-400">{t('reader.paperHint')}</p>
         {mode === 'book' && (
           <>
-            <div className="mb-1.5 mt-3 text-xs font-medium text-neutral-400">{t('reader.pageTurn')}</div>
+            <div className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-widest text-neutral-400">{t('reader.pageTurn')}</div>
             <Choice
               options={[
                 ['swipe', t('reader.turnSwipe')],
@@ -440,7 +471,6 @@ export default function Reader() {
       </Popover>
 
       <Popover anchorRef={menuBtn} open={menu === 'more'} onClose={() => setMenu(null)} align="end" className="w-64">
-        <span ref={noteBtn} />
         <MenuItem icon={FilePlus2} onClick={() => setMenu('note')}>
           {t('reader.addNotePage')}
         </MenuItem>
@@ -479,21 +509,27 @@ export default function Reader() {
           {doc.sync === 'cloud' ? t('library.stopSync') : t('library.startSync')}
         </MenuItem>
         {doc.sync === 'cloud' && (
-          <MenuItem icon={Download} onClick={() => { setMenu(null); cacheOffline(doc.id).then(() => toast(t('library.downloaded'))).catch(() => toast(t('library.downloadFailed'))); }}>
+          <MenuItem
+            icon={Download}
+            onClick={() => {
+              setMenu(null);
+              cacheOffline(doc.id).then(() => toast(t('library.downloaded'))).catch(() => toast(t('library.downloadFailed')));
+            }}
+          >
             {t('library.downloadOffline')}
           </MenuItem>
         )}
         <MenuSeparator />
-        <MenuItem icon={Palette} onClick={() => setMenu('view')}>
+        <MenuItem icon={SlidersHorizontal} onClick={() => setMenu('view')}>
           {t('reader.view')}
         </MenuItem>
       </Popover>
 
-      <Popover anchorRef={menuBtn} open={menu === 'note'} onClose={() => setMenu(null)} align="end" className="w-60 p-3">
-        <div className="mb-2 text-sm font-medium">{t('reader.addNotePageStyle')}</div>
+      <Popover anchorRef={menuBtn} open={menu === 'note'} onClose={() => setMenu(null)} align="end" className="w-64 p-4">
+        <div className="mb-3 font-serif text-base font-semibold">{t('reader.addNotePageStyle')}</div>
         <div className="grid grid-cols-2 gap-2">
           {NOTE_STYLES.map((s) => (
-            <button key={s} type="button" onClick={() => insertNotePage(s)} className="rounded-lg bg-neutral-100 px-2 py-2 text-sm hover:bg-neutral-200 dark:bg-neutral-700 dark:hover:bg-neutral-600">
+            <button key={s} type="button" onClick={() => insertNotePage(s)} className="rounded-xl border border-neutral-200 bg-white px-2 py-2.5 text-sm hover:border-accent hover:bg-accent-soft dark:border-neutral-700 dark:bg-neutral-800 dark:hover:bg-accent/20">
               {t(`canvas.${s}`)}
             </button>
           ))}
@@ -523,10 +559,18 @@ function IconButton({ children, title, onClick, active }) {
       title={title}
       aria-label={title}
       onClick={onClick}
-      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition ${
-        active ? 'bg-accent text-white' : 'text-neutral-600 hover:bg-neutral-200/70 dark:text-neutral-300 dark:hover:bg-neutral-700/70'
+      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition ${
+        active ? 'bg-accent-soft text-accent-dark dark:bg-accent/25 dark:text-accent-ring' : 'text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-700/60'
       }`}
     >
+      {children}
+    </button>
+  );
+}
+
+function PrimaryButton({ children, onClick }) {
+  return (
+    <button type="button" onClick={onClick} className="rounded-full bg-accent px-5 py-2 text-sm font-medium text-white shadow-soft hover:bg-accent-dark">
       {children}
     </button>
   );
@@ -535,13 +579,15 @@ function IconButton({ children, title, onClick, active }) {
 function Choice({ options, value, onChange, cols }) {
   const n = cols || options.length;
   return (
-    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}>
+    <div className="grid gap-1.5 rounded-2xl bg-neutral-100 p-1 dark:bg-neutral-900/60" style={{ gridTemplateColumns: `repeat(${n}, minmax(0, 1fr))` }}>
       {options.map(([key, label, Icon]) => (
         <button
           key={key}
           type="button"
           onClick={() => onChange(key)}
-          className={`flex items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-sm ${value === key ? 'bg-accent text-white' : 'bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-700 dark:hover:bg-neutral-600'}`}
+          className={`flex items-center justify-center gap-1.5 rounded-xl px-2 py-1.5 text-sm transition ${
+            value === key ? 'bg-surface font-medium text-accent-dark shadow-soft dark:bg-neutral-700 dark:text-accent-ring' : 'text-neutral-600 hover:text-neutral-900 dark:text-neutral-300'
+          }`}
         >
           {Icon && <Icon size={15} />}
           {label}
@@ -552,10 +598,9 @@ function Choice({ options, value, onChange, cols }) {
 }
 
 function Centered({ children }) {
-  return <div className="flex h-full flex-col items-center justify-center gap-3 p-6">{children}</div>;
+  return <div className="flex h-full flex-col items-center justify-center gap-4 p-6">{children}</div>;
 }
 
 function Spinner() {
-  return <div className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-300 border-t-accent" />;
+  return <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-neutral-200 border-t-accent dark:border-neutral-700" />;
 }
-

@@ -7,7 +7,8 @@ iOS (as a PWA).
 
 **Features**
 - **A proper PDF reader** — continuous **scroll** mode and **book** mode (one whole page at a time: swipe, tap the edges, arrow keys),
-  pinch/double-tap zoom, jump to any page, reading position remembered per document, bookmarks, light / sepia / dark paper
+  asked every time a document opens (or remembered, from Settings), pinch/double-tap zoom, jump to any page, reading position
+  remembered per document, bookmarks, sepia (default) / white / dark paper, a "continue reading" shelf
 - **Write on the pages** — the Quarc Notes engine: pressure-sensitive pen, highlighter, hold-to-snap shapes, stylus eraser,
   MS-Paint-style cut selection, every Excalidraw tool (shapes, arrows, text, images), palm rejection, undo/redo
 - **Real text highlights** — select text (or just swipe the highlighter over it: it **snaps to the words**) and it becomes a

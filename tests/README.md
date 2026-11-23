@@ -17,6 +17,10 @@ CHROME_PATH=/path/to/chrome npm test            # if Chrome/Edge isn't found aut
 They use ports **39902 / 39908 / 44173** (override with `E2E_AUTH_PORT`, `E2E_BACKEND_PORT`, `E2E_WEB_PORT`) so they never
 collide with — or kill — a developer's own quarc-auth/dev servers. A test PDF with known text is generated with `pdf-lib`.
 
+The app asks scroll-or-book on every opening and defaults to sepia paper, so `lightMode(page)` also injects test defaults
+(`readMode: 'scroll'`, `paperMode: 'white'`, via `testDefaults`) that only fill settings the page does not have yet. Only the
+`style` scenario runs with `lightMode(page, { defaults: false })`.
+
 | Scenario | What it proves |
 |---|---|
 | `local` | The add-a-PDF question; metadata/thumbnail; the PDF is really drawn; pen ink is stored **page-locally**, survives a reload, lands on the right page; **a local-only document makes no push/file/share request** |
@@ -24,7 +28,8 @@ collide with — or kill — a developer's own quarc-auth/dev servers. A test PD
 | `marks` | Text selection → highlight; tap to add a note; the notes panel; the pencil highlighter snapping to whole words (and staying ink over blank paper) |
 | `export` | Note pages; the downloaded PDF has real highlight/note annotations (Turkish letters intact) and real pages; Replace in library; Revert |
 | `share` | Links for an anonymous (cookie-less) reader, with/without annotations, read-only, import into another account, revoking |
-| `reading` | Scroll mode keys/wheel; book mode via arrow keys, **finger swipes** and edge taps; the position and mode are restored on reopening |
+| `reading` | Scroll mode keys/wheel; book mode via arrow keys, **finger swipes** and edge taps; the position is restored on reopening (the style is asked each time, not stored with the document) |
+| `style` | The **real defaults**: "scroll or book?" before every opening, nothing drawn until you choose; sepia paper out of the box; "remember my choice" stores it, and with it the document opens straight away; Settings → Reading style → "Ask me" brings the question back |
 | `pen` | Stylus pressure is stored; the first stylus contact makes fingers scroll; the eraser button erases (as a stored deletion) |
 | `tools` | Hold-to-snap makes a clean line; Excalidraw's rectangle and text tools work on the page; the cut selection cuts a stroke into pieces; the saved PDF has vector paths and the typed text drawn as an image |
 | `library` | Duplicates, "remember my choice", search, favorites, rename, trash/restore/delete forever, turning sync on later for a document that already has ink |

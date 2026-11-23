@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Plus, Search, Settings as SettingsIcon, LayoutGrid, List, Cloud, HardDrive, MoreVertical, Star, Trash2, RotateCcw, FileText, Share2, Download, CloudOff, Pencil, ArrowUpDown, CheckCircle2, X } from 'lucide-react';
+import { Plus, Search, Settings as SettingsIcon, LayoutGrid, List, Cloud, HardDrive, MoreVertical, Star, Trash2, RotateCcw, Share2, Download, CloudOff, Pencil, ArrowUpDown, CheckCircle2, X, ArrowRight, FileUp } from 'lucide-react';
 import { db } from '../../lib/db';
 import { importPdf, ImportError, trashDoc, restoreDoc, purgeDoc, updateDoc, removeOfflineCopy, cacheOffline } from '../../lib/library';
 import { useTransfers } from '../../lib/files';
@@ -18,6 +18,24 @@ import SyncModeDialog from '../../components/SyncModeDialog';
 import ShareDialog from '../../components/ShareDialog';
 
 const FILTERS = ['all', 'reading', 'favorites', 'local', 'trash'];
+
+// Covers for documents that have no thumbnail yet: a cloth binding in one of a few deep colours,
+// picked from the title so a book always looks the same.
+const BINDINGS = [
+  ['#5b3fa8', '#34206b'],
+  ['#9a3b56', '#5e1f35'],
+  ['#2f6b5e', '#183e37'],
+  ['#a2602c', '#613413'],
+  ['#2c5b8f', '#162f50'],
+  ['#6b6b2a', '#3d3d12'],
+  ['#7a3f8f', '#46204f'],
+  ['#8a4a3a', '#4f241a'],
+];
+function binding(title) {
+  let h = 0;
+  for (const ch of title || '') h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return BINDINGS[h % BINDINGS.length];
+}
 
 export default function Library() {
   const { t } = useTranslation();
@@ -95,9 +113,17 @@ export default function Library() {
 
   const trashCount = (docs || []).filter((d) => d.is_deleted).length;
 
+  // The book you were in the middle of: the most recently read one that is neither new nor finished.
+  const resume = useMemo(() => {
+    const started = (docs || []).filter((d) => !d.is_deleted && d.progress && d.progress.pct > 0 && d.progress.pct < 0.98);
+    started.sort((a, b) => (b.progress_at || '').localeCompare(a.progress_at || ''));
+    return started[0] || null;
+  }, [docs]);
+  const showResume = resume && filter === 'all' && !query.trim();
+
   return (
     <div
-      className="flex h-full flex-col bg-neutral-50 dark:bg-neutral-950"
+      className="flex h-full flex-col bg-neutral-50 bg-[radial-gradient(60rem_30rem_at_85%_-10%,theme(colors.accent.soft),transparent)] dark:bg-neutral-950 dark:bg-[radial-gradient(60rem_30rem_at_85%_-10%,rgb(124_58_237/0.14),transparent)]"
       onDragOver={(e) => {
         if ([...(e.dataTransfer?.types || [])].includes('Files')) {
           e.preventDefault();
@@ -113,16 +139,16 @@ export default function Library() {
         if (e.dataTransfer?.files?.length) pickFiles(e.dataTransfer.files);
       }}
     >
-      <header className="flex items-center gap-2 border-b border-neutral-200 bg-white px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900">
-        <img src="/logo.png" alt="" className="h-8 w-8 rounded-lg" />
-        <h1 className="hidden text-lg font-semibold sm:block">Quarc Reader</h1>
-        <div className="relative mx-2 flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
+      <header className="glass z-20 flex items-center gap-2 border-b border-neutral-200/70 px-3 py-2.5 dark:border-neutral-800 sm:px-5">
+        <img src="/logo.png" alt="" className="h-9 w-9 rounded-xl shadow-soft" />
+        <h1 className="hidden font-serif text-xl font-semibold tracking-tight sm:block">Quarc Reader</h1>
+        <div className="relative mx-2 max-w-xl flex-1 sm:mx-6">
+          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('library.search')}
-            className="w-full rounded-lg border border-neutral-200 bg-neutral-50 py-1.5 pl-9 pr-3 text-sm outline-none focus:border-accent dark:border-neutral-700 dark:bg-neutral-800"
+            className="w-full rounded-full border border-transparent bg-neutral-100 py-2 pl-10 pr-4 text-sm outline-none transition placeholder:text-neutral-400 focus:border-accent focus:bg-surface focus:shadow-soft dark:bg-neutral-800 dark:focus:bg-neutral-900"
           />
         </div>
         <SyncBadge state={syncState} pending={pending} />
@@ -140,7 +166,7 @@ export default function Library() {
         <button
           type="button"
           onClick={() => fileInput.current?.click()}
-          className="flex h-9 items-center gap-1.5 rounded-lg bg-accent px-3 text-sm font-medium text-white hover:bg-accent-dark"
+          className="ml-1 flex h-10 items-center gap-1.5 rounded-full bg-accent px-3.5 text-sm font-medium text-white shadow-soft transition hover:bg-accent-dark active:scale-95 sm:px-4"
         >
           <Plus size={18} />
           <span className="hidden sm:inline">{t('library.addPdf')}</span>
@@ -158,54 +184,64 @@ export default function Library() {
         />
       </header>
 
-      <nav className="flex gap-1 overflow-x-auto px-3 pt-2 [scrollbar-width:none]">
-        {FILTERS.map((f) => (
-          <button
-            key={f}
-            type="button"
-            onClick={() => setFilter(f)}
-            className={`shrink-0 rounded-full px-3 py-1 text-sm ${filter === f ? 'bg-accent text-white' : 'bg-neutral-200/70 text-neutral-700 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-300'}`}
-          >
-            {t(`library.filter.${f}`)}
-            {f === 'trash' && trashCount > 0 ? ` (${trashCount})` : ''}
-          </button>
-        ))}
-      </nav>
+      <main className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-7xl px-4 pb-16 pt-5 sm:px-6">
+          {showResume && <Resume doc={resume} cached={cachedShas?.has(resume.file_sha256)} onOpen={() => open(resume)} />}
 
-      <main className="min-h-0 flex-1 overflow-y-auto p-3">
-        {docs === undefined ? null : items.length === 0 ? (
-          <Empty filter={filter} hasAny={(docs || []).some((d) => !d.is_deleted)} onAdd={() => fileInput.current?.click()} />
-        ) : view === 'grid' ? (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {items.map((d) => (
-              <DocCard key={d.id} doc={d} layout="grid" cached={cachedShas?.has(d.file_sha256)} transfer={transfers[d.id]} onOpen={() => open(d)} onAction={(kind) => act(kind, d)} />
+          <nav className="-mx-1 mb-5 flex gap-1.5 overflow-x-auto px-1 py-1 [scrollbar-width:none]">
+            {FILTERS.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                className={`shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition ${
+                  filter === f ? 'bg-neutral-900 text-white shadow-soft dark:bg-neutral-100 dark:text-neutral-900' : 'text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-800'
+                }`}
+              >
+                {t(`library.filter.${f}`)}
+                {f === 'trash' && trashCount > 0 ? ` (${trashCount})` : ''}
+              </button>
             ))}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {items.map((d) => (
-              <DocCard key={d.id} doc={d} layout="list" cached={cachedShas?.has(d.file_sha256)} transfer={transfers[d.id]} onOpen={() => open(d)} onAction={(kind) => act(kind, d)} />
-            ))}
-          </div>
-        )}
+            {docs !== undefined && items.length > 0 && <span className="ml-auto hidden shrink-0 self-center pl-4 text-xs text-neutral-400 sm:block">{t('library.count', { count: items.length })}</span>}
+          </nav>
+
+          {docs === undefined ? null : items.length === 0 ? (
+            <Empty filter={filter} hasAny={(docs || []).some((d) => !d.is_deleted)} onAdd={() => fileInput.current?.click()} />
+          ) : view === 'grid' ? (
+            <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+              {items.map((d) => (
+                <DocCard key={d.id} doc={d} layout="grid" cached={cachedShas?.has(d.file_sha256)} transfer={transfers[d.id]} onOpen={() => open(d)} onAction={(kind) => act(kind, d)} />
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {items.map((d) => (
+                <DocCard key={d.id} doc={d} layout="list" cached={cachedShas?.has(d.file_sha256)} transfer={transfers[d.id]} onOpen={() => open(d)} onAction={(kind) => act(kind, d)} />
+              ))}
+            </div>
+          )}
+        </div>
       </main>
 
       {dragging && (
-        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-accent/10 backdrop-blur-sm">
-          <div className="rounded-2xl border-2 border-dashed border-accent bg-white/90 px-8 py-6 text-lg font-medium dark:bg-neutral-900/90">{t('library.dropHere')}</div>
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-accent/15 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-4xl border-2 border-dashed border-accent bg-surface/95 px-12 py-10 text-lg font-medium shadow-float dark:bg-neutral-900/95">
+            <FileUp size={36} className="text-accent" />
+            {t('library.dropHere')}
+          </div>
         </div>
       )}
 
       {progress && (
-        <div className="fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
-          <div className="flex items-center gap-3 rounded-xl bg-neutral-900 px-4 py-3 text-sm text-white shadow-xl">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+        <div className="fixed inset-x-0 bottom-5 z-50 flex justify-center px-4">
+          <div className="flex items-center gap-3 rounded-2xl bg-neutral-900 px-4 py-3 text-sm text-white shadow-float dark:bg-neutral-100 dark:text-neutral-900">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white dark:border-neutral-900/30 dark:border-t-neutral-900" />
             <span className="max-w-[60vw] truncate">{t('library.adding', { name: progress.name, n: progress.done + 1, total: progress.total })}</span>
           </div>
         </div>
       )}
 
-      <Popover anchorRef={sortBtn} open={sortOpen} onClose={() => setSortOpen(false)} align="end" className="w-48">
+      <Popover anchorRef={sortBtn} open={sortOpen} onClose={() => setSortOpen(false)} align="end" className="w-52">
         {['recent', 'title', 'added'].map((s) => (
           <MenuItem
             key={s}
@@ -240,15 +276,15 @@ export default function Library() {
       {dialog?.kind === 'rename' && <RenameDialog doc={dialog.doc} onClose={() => setDialog(null)} />}
       {dialog?.kind === 'purge' && (
         <Modal open onClose={() => setDialog(null)} title={t('library.deleteForever')}>
-          <p className="mb-4 text-sm text-neutral-600 dark:text-neutral-300">
+          <p className="mb-5 text-sm leading-relaxed text-neutral-600 dark:text-neutral-300">
             {dialog.doc.sync === 'cloud' ? t('library.deleteForeverCloud', { title: dialog.doc.title }) : t('library.deleteForeverLocal', { title: dialog.doc.title })}
           </p>
           <div className="flex justify-end gap-2">
-            <button className="rounded-lg px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700" onClick={() => setDialog(null)}>
+            <button className="rounded-xl px-4 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700" onClick={() => setDialog(null)}>
               {t('common.cancel')}
             </button>
             <button
-              className="rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+              className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
               onClick={async () => {
                 await purgeDoc(dialog.doc.id);
                 setDialog(null);
@@ -309,7 +345,13 @@ export default function Library() {
 
 function HeaderButton({ children, title, onClick }) {
   return (
-    <button type="button" title={title} aria-label={title} onClick={onClick} className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-800">
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className="flex h-10 w-10 items-center justify-center rounded-full text-neutral-600 transition hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-800"
+    >
       {children}
     </button>
   );
@@ -327,16 +369,110 @@ function SyncBadge({ state, pending }) {
   );
 }
 
+// A little shelf of books, for an empty library.
+function ShelfArt() {
+  return (
+    <svg viewBox="0 0 220 120" className="h-28 w-52" aria-hidden="true">
+      <rect x="10" y="108" width="200" height="6" rx="3" className="fill-neutral-300 dark:fill-neutral-700" />
+      <rect x="28" y="38" width="26" height="70" rx="3" fill="#5b3fa8" />
+      <rect x="34" y="50" width="14" height="3" rx="1.5" fill="#fff" opacity=".5" />
+      <rect x="58" y="22" width="30" height="86" rx="3" fill="#9a3b56" />
+      <rect x="64" y="36" width="18" height="3" rx="1.5" fill="#fff" opacity=".5" />
+      <rect x="92" y="44" width="24" height="64" rx="3" fill="#2f6b5e" />
+      <rect x="97" y="56" width="14" height="3" rx="1.5" fill="#fff" opacity=".5" />
+      <g transform="rotate(14 160 108)">
+        <rect x="132" y="30" width="28" height="78" rx="3" fill="#a2602c" />
+        <rect x="138" y="44" width="16" height="3" rx="1.5" fill="#fff" opacity=".5" />
+      </g>
+      <rect x="170" y="52" width="22" height="56" rx="3" fill="#2c5b8f" />
+    </svg>
+  );
+}
+
 function Empty({ filter, hasAny, onAdd }) {
   const { t } = useTranslation();
-  if (filter !== 'all' && hasAny) return <p className="py-20 text-center text-neutral-400">{t(`library.empty.${filter}`)}</p>;
+  if (filter !== 'all' && hasAny) return <p className="py-20 text-center font-serif text-lg text-neutral-400">{t(`library.empty.${filter}`)}</p>;
   return (
-    <div className="flex flex-col items-center gap-4 py-24 text-center">
-      <FileText size={48} className="text-neutral-300 dark:text-neutral-600" />
+    <div className="mx-auto flex max-w-lg flex-col items-center gap-5 rounded-4xl border-2 border-dashed border-neutral-300 px-6 py-14 text-center dark:border-neutral-700">
+      <ShelfArt />
+      <p className="font-serif text-2xl font-semibold">{t('library.emptyTitle')}</p>
       <p className="max-w-sm text-neutral-500">{t('library.empty.all')}</p>
-      <button className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 font-medium text-white hover:bg-accent-dark" onClick={onAdd}>
+      <button className="flex items-center gap-2 rounded-full bg-accent px-5 py-2.5 font-medium text-white shadow-soft transition hover:bg-accent-dark active:scale-95" onClick={onAdd}>
         <Plus size={18} /> {t('library.addPdf')}
       </button>
+    </div>
+  );
+}
+
+// The cover: the first page when we have it, otherwise a cloth binding with the title on it.
+function Cover({ doc, cached, className = '' }) {
+  const { t } = useTranslation();
+  const cloud = doc.sync === 'cloud';
+  const pct = doc.progress?.pct || 0;
+  const [a, b] = binding(doc.title);
+  return (
+    <div className={`book-cover relative overflow-hidden rounded-l-[4px] rounded-r-[10px] bg-white shadow-cover dark:bg-neutral-800 ${className}`}>
+      {doc.thumb ? (
+        <img src={doc.thumb} alt="" className="h-full w-full object-cover" draggable={false} />
+      ) : (
+        <div className="flex h-full w-full flex-col justify-between p-[12%] text-[#fbf3e2]" style={{ background: `linear-gradient(150deg, ${a}, ${b})` }}>
+          <div className="h-px w-8 bg-[#fbf3e2]/50" />
+          <p className="line-clamp-4 font-serif text-[clamp(0.7rem,2.6vw,1rem)] font-semibold leading-tight">{doc.title}</p>
+          <p className="truncate text-[0.6rem] uppercase tracking-widest opacity-70">{doc.author || 'PDF'}</p>
+        </div>
+      )}
+      {cloud && !cached && doc.file_ready && (
+        <span className="absolute bottom-2 left-2 rounded-full bg-black/55 p-1 text-white backdrop-blur" title={t('library.notOnDevice')}>
+          <CloudOff size={11} />
+        </span>
+      )}
+      {pct > 0 && (
+        <div className="absolute inset-x-0 bottom-0 h-1.5 bg-black/20">
+          <div className="h-full bg-accent" style={{ width: `${Math.round(pct * 100)}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "Continue reading": the one book you were in the middle of, big, at the top.
+function Resume({ doc, cached, onOpen }) {
+  const { t, i18n } = useTranslation();
+  const pct = Math.round((doc.progress?.pct || 0) * 100);
+  const page = Math.min((doc.progress?.page ?? 0) + 1, doc.page_count || 1);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      data-testid="resume-card"
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="group relative mb-8 flex items-center gap-5 overflow-hidden rounded-4xl border border-neutral-200/70 bg-gradient-to-br from-sepia-100 via-surface to-surface p-4 shadow-soft transition hover:shadow-float dark:border-neutral-800 dark:from-neutral-900 dark:via-neutral-900 dark:to-neutral-900 sm:gap-8 sm:p-6"
+    >
+      <Cover doc={doc} cached={cached} className="aspect-[3/4] w-24 shrink-0 transition duration-300 group-hover:-translate-y-0.5 group-hover:shadow-cover-hover sm:w-36" />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent">{t('library.continue')}</p>
+        <h2 className="mt-1.5 line-clamp-2 font-serif text-xl font-semibold leading-tight sm:text-3xl">{doc.title}</h2>
+        <p className="mt-1 truncate text-sm text-neutral-500">{doc.author || t('library.unknownAuthor')}</p>
+        <div className="mt-4 flex items-center gap-3">
+          <div className="h-1.5 max-w-xs flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700">
+            <div className="h-full rounded-full bg-accent" style={{ width: `${pct}%` }} />
+          </div>
+          <span className="text-xs tabular-nums text-neutral-500">{pct}%</span>
+        </div>
+        <p className="mt-1.5 text-xs text-neutral-400">
+          {t('library.pageOf', { n: page, total: doc.page_count || 1 })}
+          {doc.progress_at ? ` · ${relativeTime(doc.progress_at, i18n.language)}` : ''}
+        </p>
+        <span className="mt-4 hidden items-center gap-2 rounded-full bg-accent px-5 py-2 text-sm font-medium text-white shadow-soft transition group-hover:bg-accent-dark sm:inline-flex">
+          {t('library.resume')} <ArrowRight size={16} />
+        </span>
+      </div>
     </div>
   );
 }
@@ -351,7 +487,7 @@ function DocCard({ doc, layout, cached, transfer, onOpen, onAction }) {
 
   const badge = (
     <span
-      className={`flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium ${cloud ? 'bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300' : 'bg-neutral-200 text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300'}`}
+      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${cloud ? 'bg-accent-soft text-accent-dark dark:bg-accent/20 dark:text-accent-ring' : 'bg-neutral-200/80 text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300'}`}
       title={cloud ? t('library.syncedHint') : t('library.localHint')}
     >
       {cloud ? <Cloud size={11} /> : <HardDrive size={11} />}
@@ -381,7 +517,7 @@ function DocCard({ doc, layout, cached, transfer, onOpen, onAction }) {
             e.stopPropagation();
             setMenu(true);
           }}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-neutral-600 shadow hover:bg-white dark:bg-neutral-800/90 dark:text-neutral-200"
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-surface/90 text-neutral-600 shadow-soft backdrop-blur transition hover:bg-surface dark:bg-neutral-800/90 dark:text-neutral-200"
         >
           <MoreVertical size={16} />
         </button>
@@ -409,36 +545,21 @@ function DocCard({ doc, layout, cached, transfer, onOpen, onAction }) {
     </div>
   );
 
-  const cover = (
-    <div className={`relative overflow-hidden rounded-lg bg-white shadow-sm ring-1 ring-neutral-200 dark:bg-neutral-800 dark:ring-neutral-700 ${layout === 'grid' ? 'aspect-[3/4] w-full' : 'h-24 w-[4.5rem] shrink-0'}`}>
-      {doc.thumb ? <img src={doc.thumb} alt="" className="h-full w-full object-cover" draggable={false} /> : <div className="flex h-full w-full items-center justify-center text-neutral-300"><FileText size={32} /></div>}
-      {cloud && !cached && doc.file_ready && (
-        <span className="absolute bottom-1 left-1 rounded-full bg-black/50 p-1 text-white" title={t('library.notOnDevice')}>
-          <CloudOff size={11} />
-        </span>
-      )}
-      {pct > 0 && (
-        <div className="absolute inset-x-0 bottom-0 h-1 bg-black/10">
-          <div className="h-full bg-accent" style={{ width: `${Math.round(pct * 100)}%` }} />
-        </div>
-      )}
-    </div>
-  );
-
   if (layout === 'list') {
     return (
-      <div className="flex cursor-pointer items-center gap-3 rounded-xl bg-white p-2 shadow-sm ring-1 ring-neutral-200 hover:ring-accent dark:bg-neutral-900 dark:ring-neutral-800" onClick={onOpen}>
-        {cover}
+      <div className="group flex cursor-pointer items-center gap-4 rounded-2xl border border-neutral-200/70 bg-surface p-2.5 pr-3 shadow-soft transition hover:border-accent-ring hover:shadow-float dark:border-neutral-800 dark:bg-neutral-900" onClick={onOpen}>
+        <Cover doc={doc} cached={cached} className="h-24 w-[4.5rem] shrink-0" />
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium">{doc.title}</p>
+          <p className="truncate font-serif text-base font-semibold">{doc.title}</p>
           <p className="truncate text-sm text-neutral-500">{doc.author || t('library.unknownAuthor')}</p>
-          <div className="mt-1 flex items-center gap-2 text-xs text-neutral-400">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-neutral-400">
             {badge}
             <span>{doc.page_count} {t('library.pages')}</span>
             {pct > 0 && <span>{Math.round(pct * 100)}%</span>}
             {doc.progress_at && <span>{relativeTime(doc.progress_at, i18n.language)}</span>}
           </div>
         </div>
+        {doc.is_favorite ? <Star size={16} className="shrink-0 fill-amber-400 text-amber-400" /> : null}
         {menuEl}
       </div>
     );
@@ -446,13 +567,14 @@ function DocCard({ doc, layout, cached, transfer, onOpen, onAction }) {
 
   return (
     <div className="group relative cursor-pointer" onClick={onOpen}>
-      {cover}
-      <div className="absolute right-1.5 top-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100">{menuEl}</div>
-      {doc.is_favorite ? <Star size={16} className="absolute left-2 top-2 fill-amber-400 text-amber-400 drop-shadow" /> : null}
-      <p className="mt-2 line-clamp-2 text-sm font-medium leading-snug">{doc.title}</p>
-      <div className="mt-1 flex items-center gap-1.5 text-xs text-neutral-500">
+      <Cover doc={doc} cached={cached} className="aspect-[3/4] w-full transition duration-300 group-hover:-translate-y-1 group-hover:shadow-cover-hover" />
+      <div className="absolute right-2 top-2 opacity-100 sm:opacity-0 sm:transition sm:group-hover:opacity-100">{menuEl}</div>
+      {doc.is_favorite ? <Star size={17} className="pointer-events-none absolute left-2 top-2 fill-amber-400 text-amber-400 drop-shadow" /> : null}
+      <p className="mt-3 line-clamp-2 font-serif text-[15px] font-semibold leading-snug">{doc.title}</p>
+      <p className="mt-0.5 truncate text-xs text-neutral-500">{doc.author || t('library.unknownAuthor')}</p>
+      <div className="mt-1.5 flex items-center gap-1.5 text-xs text-neutral-500">
         {badge}
-        {pct > 0 && <span>{Math.round(pct * 100)}%</span>}
+        {pct > 0 && <span className="tabular-nums">{Math.round(pct * 100)}%</span>}
       </div>
     </div>
   );
@@ -462,6 +584,7 @@ function RenameDialog({ doc, onClose }) {
   const { t } = useTranslation();
   const [title, setTitle] = useState(doc.title);
   const [author, setAuthor] = useState(doc.author || '');
+  const field = 'rounded-xl border border-neutral-300 bg-transparent px-3.5 py-2.5 outline-none focus:border-accent dark:border-neutral-600';
   return (
     <Modal open onClose={onClose} title={t('library.rename')}>
       <form
@@ -472,13 +595,13 @@ function RenameDialog({ doc, onClose }) {
           onClose();
         }}
       >
-        <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('library.titleField')} className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 outline-none focus:border-accent dark:border-neutral-600" />
-        <input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder={t('library.authorField')} className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 outline-none focus:border-accent dark:border-neutral-600" />
-        <div className="flex justify-end gap-2">
-          <button type="button" className="rounded-lg px-3 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700" onClick={onClose}>
+        <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t('library.titleField')} className={field} />
+        <input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder={t('library.authorField')} className={field} />
+        <div className="mt-1 flex justify-end gap-2">
+          <button type="button" className="rounded-xl px-4 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700" onClick={onClose}>
             {t('common.cancel')}
           </button>
-          <button type="submit" className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-dark">
+          <button type="submit" className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent-dark">
             {t('common.save')}
           </button>
         </div>

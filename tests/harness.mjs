@@ -264,8 +264,29 @@ export function inkPixels(page, testSource) {
 
 export const RED = 'a > 200 && r > 170 && g < 90 && b < 90';
 
-export async function lightMode(page) {
+export async function lightMode(page, { defaults = true } = {}) {
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+  // The app asks "scroll or book?" every time it opens a document and defaults to sepia paper.
+  // Most scenarios are about something else, so they open in scroll mode on white paper unless a
+  // scenario asks for the real defaults (`defaults: false`: see scenarioStyle).
+  if (defaults) await testDefaults(page);
+}
+
+// Fills settings the page does not have yet (never overrides what the app or an earlier call stored),
+// before the app starts, on every load of the page.
+export async function testDefaults(page, extra = {}) {
+  await page.evaluateOnNewDocument(
+    (extra) => {
+      let current = {};
+      try {
+        current = JSON.parse(localStorage.getItem('quarc_reader_settings') || '{}');
+      } catch {
+        /* start from nothing */
+      }
+      localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 2, readMode: 'scroll', paperMode: 'white', ...extra, ...current }));
+    },
+    extra
+  );
 }
 
 // Draw a stroke with the mouse (the pen tool is active by default and the mouse draws with it).

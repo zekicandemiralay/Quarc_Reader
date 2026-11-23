@@ -15,7 +15,7 @@ export default function Modal({ open, onClose, title, children, className = '', 
   if (!open) return null;
   return createPortal(
     <div
-      className={`fixed inset-0 z-[1100] flex justify-center bg-black/40 p-3 backdrop-blur-[2px] ${top ? 'items-start pt-[10vh]' : 'items-center'}`}
+      className={`fixed inset-0 z-[1100] flex justify-center bg-neutral-950/45 p-3 backdrop-blur-sm ${top ? 'items-start pt-[10vh]' : 'items-center'}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose?.();
       }}
@@ -23,15 +23,16 @@ export default function Modal({ open, onClose, title, children, className = '', 
       <div
         role="dialog"
         aria-modal="true"
-        className={`flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white text-neutral-900 shadow-2xl dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 ${className}`}
+        className={`flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-neutral-200/70 bg-surface text-neutral-900 shadow-float dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 ${className}`}
       >
         {title && (
-          <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 dark:border-neutral-700">
-            <h2 className="font-semibold">{title}</h2>
+          <div className="flex items-center justify-between px-5 pb-1 pt-4">
+            <h2 className="font-serif text-xl font-semibold tracking-tight">{title}</h2>
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-1 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
+              aria-label="Close"
+              className="rounded-full p-1.5 text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
             >
               <X size={18} />
             </button>

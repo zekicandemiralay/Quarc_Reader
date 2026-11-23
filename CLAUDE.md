@@ -9,7 +9,9 @@ Decisions made with the owner (don't re-litigate): PDF first, EPUB later (text h
 a document is **local-only or synced, chosen per document and changeable later**; "Save PDF" keeps the original and
 exports a copy, with an explicit **Replace in library** (original kept as `orig_sha256`, revertible); share links are
 read-only for anyone who can reach the server, with a per-link choice of including annotations; note pages can be
-inserted between PDF pages. Adding the app to Quarc Store (SSO kit, catalog, `MIGRATION.md`) is the owner's own step —
+inserted between PDF pages; **paper is sepia by default**, and **every opening asks scroll or book** (with a "remember my
+choice" box; Settings → Reading → Reading style = Ask me / Scroll / Book is the default, and the View menu changes the
+style for that reading only — it is not stored with the document). Adding the app to Quarc Store (SSO kit, catalog, `MIGRATION.md`) is the owner's own step —
 leave `Quarc_Store` alone and leave the `// Store` hooks (authStore, MainActivity, manifest, updateCheck) as they are.
 
 ## Layout
@@ -23,6 +25,16 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ## How it works (the parts that are easy to break)
 
+- **Look and feel** (own identity, not Quarc Notes'): `tailwind.config.js` overrides `neutral` with a warm paper → aubergine
+  scale (so the Store-kit components, which use `neutral-*`, restyle too), `accent` is the logo's violet, plus `surface`,
+  `sepia`, a system-serif `font-serif` for titles, and `shadow-cover/float/soft`. The reader's chrome is `reader/Toolbar.jsx`
+  (floating dock; Excalidraw's own toolbar/menus/footer are hidden by CSS in `ReaderCanvas`) and `reader/PageBar.jsx`
+  (page counter + go-to slider + zoom); `INSETS` in `geometry.js` keeps pages clear of both. Library = "continue reading"
+  hero + book-cover cards (generated cloth covers when there is no thumbnail).
+- **Reading style prompt:** `Reader.jsx` keeps a per-opening `sessionMode` (keyed by route id); `mode = sessionMode ??
+  (readMode === 'ask' ? null : readMode)` and `ReaderCanvas` is not mounted until there is a mode (`ReadingStyleDialog`).
+  Settings live in `localStorage` `quarc_reader_settings`; `settingsVersion` (2) resets old stored `readMode`/`paperMode`
+  once. `SharedView` never asks (local `mode` state; `'ask'` would be an invalid canvas mode).
 - **The reader is canvas-based.** Pages stack vertically in Excalidraw's scene coordinates (96 dpi px; a PDF point is
   4/3 px). Layers: paper canvas (PDF bitmaps) → marks canvas (highlights) → Excalidraw (ink) → overlay canvas (live stroke)
   → DOM text layers (selection, only when needed). `reader/geometry.js` is the pure layout/view math.
@@ -63,6 +75,12 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   navigation path (`goToPage`, `scrollByScreen`, wheel, pointer) must call `stopInitialView()` or it is silently overridden.
 - Test harness: `dumpDb` must never *create* the app's IndexedDB (a plain `open()` of a missing DB makes an empty v1 one that
   blocks the app's own upgrade) and must close its connection.
+- Test harness: because every opening asks scroll/book and paper defaults to sepia, `lightMode(page)` injects
+  `readMode: 'scroll'` / `paperMode: 'white'` (`testDefaults`, fills only missing keys); only scenario `style` uses the real
+  defaults. Tests find library cards by `.cursor-pointer` / `div.group` with a `button[aria-label="More"]`, titles by
+  `main p.line-clamp-2`, tabs by `nav button` — the "continue reading" hero is a `role=button` without those classes on purpose.
+- A flex container that centres its child (`items-center`) cannot scroll to the child's overflowing top: use `m-auto` on the
+  child (see `ReadingStyleDialog`). Floating panels (`useFloatingPosition`) stay below the tool dock (`DOCK_CLEAR`).
 - pdf.js is the 4.10 **legacy** build (older Android WebViews); its cMaps/standard fonts are copied to `public/pdfjs/` by
   `scripts/copy-pdfjs-assets.mjs` (prebuild/predev) and are gitignored.
 
@@ -70,9 +88,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 98 unit tests (geometry, ink, marks, export, i18n, shapes)
+cd frontend && npm test                  # 98 unit tests (geometry, ink, marks, export, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading pen tools library big   (146 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style pen tools library big   (161 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 

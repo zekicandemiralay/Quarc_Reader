@@ -7,8 +7,9 @@ import { activeMarks, markBounds } from './marks';
 // pages go dark together and match the ink (which uses the same filter).
 
 export const CELL_SIZE = 28; // line/grid spacing on note pages (scene px) — same as Quarc Notes
-export const DESK = { light: '#d4d4d4', sepia: '#cdc3ad', dark: '#0b0b0d' };
-export const PAPER = { white: '#ffffff', sepia: '#f4ecd8' };
+// The desk the pages lie on: warm, so a white or sepia page glows a little against it.
+export const DESK = { white: '#e5e0d6', sepia: '#d7cab0', dark: '#0e0b14' };
+export const PAPER = { white: '#ffffff', sepia: '#f5ebd4' };
 // Applied to the paper canvas (and the ink preview) in dark mode.
 export const DARK_FILTER = 'invert(93%) hue-rotate(180deg)';
 
@@ -75,7 +76,7 @@ export function drawPaper(canvas, view, rect, layout, raster, { sepia, dark, onl
 
     ctx.save();
     if (!dark) {
-      ctx.shadowColor = 'rgba(0,0,0,0.18)';
+      ctx.shadowColor = 'rgba(58,40,20,0.26)';
       ctx.shadowBlur = 14;
       ctx.shadowOffsetY = 3;
     }
@@ -139,7 +140,7 @@ export function drawMarks(canvas, view, rect, layout, marksByPage, { dark, hidde
         const b = markBounds(m);
         ctx.save();
         ctx.setLineDash([5, 4]);
-        ctx.strokeStyle = '#6965db';
+        ctx.strokeStyle = '#7c3aed';
         ctx.lineWidth = 1.5;
         ctx.strokeRect(ox + b.x * zoom - 2, oy + b.y * zoom - 2, b.w * zoom + 4, b.h * zoom + 4);
         ctx.restore();

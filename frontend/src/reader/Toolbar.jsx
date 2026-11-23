@@ -1,6 +1,27 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { PenLine, Highlighter, Undo2, Redo2, Shapes, Hand, Pointer, TextCursorInput, Sparkles } from 'lucide-react';
+import {
+  PenLine,
+  Highlighter,
+  Undo2,
+  Redo2,
+  Hand,
+  Pointer,
+  TextCursorInput,
+  Shapes,
+  SlidersHorizontal,
+  Square,
+  Circle,
+  Diamond,
+  MoveUpRight,
+  Minus,
+  Type,
+  ImagePlus,
+  Eraser,
+  MousePointer2,
+  Sparkles,
+  ChevronDown,
+} from 'lucide-react';
 import Popover from '../components/Popover';
 
 export const PEN_COLORS = ['#1f2937', '#e03131', '#2f9e44', '#1971c2', '#f08c00', '#7048e8'];
@@ -17,7 +38,33 @@ export const HIGHLIGHTER_SIZES = [
   { size: 22, dot: 17 },
 ];
 
-function ToolButton({ active, onClick, title, children, disabled, className = '' }) {
+// Icons for the MS-Paint-style cut selection (dashed marquee / dashed lasso).
+export const RectSelectIcon = (
+  <svg viewBox="0 0 20 20" width={18} height={18} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3.5" y="5" width="13" height="10" rx="1" strokeDasharray="2.5 2.5" />
+  </svg>
+);
+export const FreeformSelectIcon = (
+  <svg viewBox="0 0 20 20" width={18} height={18} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4.5 9.7c-.4-3.1 2.6-5.3 5.4-4.9 3.1.5 5.7 2.1 5.4 5.2-.3 2.9-3.1 4.7-5.9 4.6-2.3-.1-4.6-1.9-4.9-4.9z" strokeDasharray="2.5 2.5" />
+  </svg>
+);
+
+// Every other tool Excalidraw has, shown in the "Tools" flyout instead of Excalidraw's own island.
+const TOOLS = [
+  ['selection', MousePointer2, 'select'],
+  ['hand', Hand, 'hand'],
+  ['rectangle', Square, 'rectangle'],
+  ['diamond', Diamond, 'diamond'],
+  ['ellipse', Circle, 'ellipse'],
+  ['arrow', MoveUpRight, 'arrow'],
+  ['line', Minus, 'line'],
+  ['text', Type, 'text'],
+  ['image', ImagePlus, 'image'],
+  ['eraser', Eraser, 'eraser'],
+];
+
+function DockButton({ active, onClick, title, children, disabled, className = '', testId }) {
   return (
     <button
       type="button"
@@ -25,9 +72,10 @@ function ToolButton({ active, onClick, title, children, disabled, className = ''
       aria-label={title}
       aria-pressed={active}
       disabled={disabled}
+      data-testid={testId}
       onClick={onClick}
-      className={`flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium transition disabled:opacity-30 ${
-        active ? 'bg-accent text-white shadow-sm' : 'text-neutral-600 hover:bg-neutral-200/70 dark:text-neutral-300 dark:hover:bg-neutral-700/70'
+      className={`flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-xl px-2.5 text-sm font-medium transition disabled:opacity-30 ${
+        active ? 'bg-accent text-white shadow-soft' : 'text-neutral-600 hover:bg-neutral-200/60 dark:text-neutral-300 dark:hover:bg-neutral-700/60'
       } ${className}`}
     >
       {children}
@@ -35,14 +83,14 @@ function ToolButton({ active, onClick, title, children, disabled, className = ''
   );
 }
 
-const Divider = ({ className = '' }) => <div className={`mx-1 h-6 w-px shrink-0 bg-neutral-300 dark:bg-neutral-700 ${className}`} />;
+const Divider = ({ className = '' }) => <div className={`mx-1 h-6 w-px shrink-0 bg-neutral-300/70 dark:bg-neutral-600/70 ${className}`} />;
 
 function Swatches({ colors, active, drawMode, isHl, onPick, inkFilter, wrap = false }) {
   const { t } = useTranslation();
   const custom = !colors.includes(active.color);
-  const ring = (on) => (on ? 'ring-accent' : 'ring-transparent hover:ring-neutral-300');
+  const ring = (on) => (on ? 'ring-accent' : 'ring-transparent hover:ring-neutral-300 dark:hover:ring-neutral-500');
   return (
-    <div className={`flex shrink-0 items-center ${wrap ? 'flex-wrap gap-2' : 'gap-1'}`} style={{ filter: inkFilter }}>
+    <div className={`flex shrink-0 items-center ${wrap ? 'flex-wrap gap-2' : 'gap-1.5'}`} style={{ filter: inkFilter }}>
       {colors.map((c) => (
         <button
           key={c}
@@ -50,13 +98,13 @@ function Swatches({ colors, active, drawMode, isHl, onPick, inkFilter, wrap = fa
           title={c}
           aria-label={c}
           onClick={() => onPick({ color: c })}
-          className={`h-7 w-7 shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-white transition dark:ring-offset-neutral-900 ${ring(drawMode && active.color === c)}`}
-          style={{ backgroundColor: c, opacity: isHl ? 0.85 : 1 }}
+          className={`h-6 w-6 shrink-0 rounded-full ring-2 ring-offset-2 ring-offset-surface transition dark:ring-offset-neutral-800 ${ring(drawMode && active.color === c)}`}
+          style={{ backgroundColor: c, opacity: isHl ? 0.9 : 1 }}
         />
       ))}
       <label
         title={t('canvas.customColor')}
-        className={`relative flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-white dark:ring-offset-neutral-900 ${ring(custom && drawMode)}`}
+        className={`relative flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-full ring-2 ring-offset-2 ring-offset-surface dark:ring-offset-neutral-800 ${ring(custom && drawMode)}`}
         style={{ background: custom ? active.color : 'conic-gradient(#f03e3e, #fab005, #40c057, #15aabf, #4c6ef5, #be4bdb, #f03e3e)' }}
       >
         <input
@@ -81,8 +129,8 @@ function Sizes({ sizes, active, drawMode, isHl, onPick, inkFilter }) {
           title={`${t('canvas.penSize')} ${s.size}`}
           aria-label={`${t('canvas.penSize')} ${s.size}`}
           onClick={() => onPick({ size: s.size })}
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition ${
-            drawMode && active.size === s.size ? 'bg-neutral-200 dark:bg-neutral-700' : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
+          className={`flex h-10 w-9 shrink-0 items-center justify-center rounded-xl transition ${
+            drawMode && active.size === s.size ? 'bg-neutral-200/80 dark:bg-neutral-700' : 'hover:bg-neutral-100 dark:hover:bg-neutral-800'
           }`}
         >
           <span className="rounded-full" style={{ width: s.dot, height: s.dot, backgroundColor: active.color, opacity: isHl ? 0.6 : 1, filter: inkFilter }} />
@@ -92,9 +140,16 @@ function Sizes({ sizes, active, drawMode, isHl, onPick, inkFilter }) {
   );
 }
 
-// The reader's tool row: pen, highlighter, text selection, colours, sizes,
-// undo/redo and the handwriting preferences. Excalidraw's own tool island
-// (shapes, text, eraser, selection...) floats on the canvas beneath it.
+function Switch({ checked }) {
+  return (
+    <span className={`relative inline-block h-5 w-9 shrink-0 rounded-full transition ${checked ? 'bg-accent' : 'bg-neutral-300 dark:bg-neutral-600'}`}>
+      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${checked ? 'left-[1.125rem]' : 'left-0.5'}`} />
+    </span>
+  );
+}
+
+// The reader's floating tool dock: pen, highlighter, text selection, colours, sizes, undo/redo, and a
+// flyout with every other tool. It floats over the page (frosted), so the page keeps the whole screen.
 export default function Toolbar({
   drawMode, // 'pen' | 'highlighter' | null (another tool is active)
   textMode,
@@ -113,27 +168,46 @@ export default function Toolbar({
   onUndo,
   onRedo,
   inkFilter,
+  activeTool, // Excalidraw's active tool type
+  cutMode, // null | 'rect' | 'freeform' — the cut selection
+  onTool,
+  onCut,
 }) {
   const { t } = useTranslation();
-  const [penMenu, setPenMenu] = useState(false);
-  const penBtn = useRef(null);
+  const [menu, setMenu] = useState(null); // 'color' | 'tools' | 'options'
+  const colorBtn = useRef(null);
+  const toolsBtn = useRef(null);
+  const optionsBtn = useRef(null);
   const isHl = drawMode === 'highlighter';
   const active = isHl ? highlighter : pen;
   const common = { active, drawMode, isHl, onPick: isHl ? onHighlighterChange : onPenChange, inkFilter };
   const colors = isHl ? HIGHLIGHTER_COLORS : PEN_COLORS;
   const sizes = isHl ? HIGHLIGHTER_SIZES : PEN_SIZES;
 
+  // Is one of the "other" tools active (so the Tools button shows it)?
+  const otherTool = !textMode && !drawMode ? (cutMode ? `cut-${cutMode}` : activeTool) : null;
+  const CurrentToolIcon = (otherTool && TOOLS.find(([type]) => type === otherTool)?.[1]) || null;
+  const choose = (fn) => () => {
+    setMenu(null);
+    fn();
+  };
+
   return (
-    <div className="flex items-center gap-1 overflow-x-auto border-b border-neutral-200 bg-white/90 px-2 py-1.5 backdrop-blur [scrollbar-width:none] dark:border-neutral-800 dark:bg-neutral-900/90">
-      <ToolButton active={drawMode === 'pen'} onClick={() => onDrawMode('pen')} title={t('canvas.pen')}>
+    <div
+      data-overlay
+      data-dock
+      data-finger={fingerDraws ? 'draws' : 'scrolls'}
+      className="absolute left-1/2 top-3 z-[5] flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-2xl border border-neutral-200/80 bg-surface/90 p-1.5 shadow-float backdrop-blur-xl [scrollbar-width:none] dark:border-neutral-700/80 dark:bg-neutral-800/90"
+    >
+      <DockButton active={drawMode === 'pen'} onClick={() => onDrawMode('pen')} title={t('canvas.pen')} testId="tool-pen">
         <PenLine size={18} />
-      </ToolButton>
-      <ToolButton active={isHl} onClick={() => onDrawMode('highlighter')} title={t('canvas.highlighter')}>
+      </DockButton>
+      <DockButton active={isHl} onClick={() => onDrawMode('highlighter')} title={t('canvas.highlighter')} testId="tool-highlighter">
         <Highlighter size={18} />
-      </ToolButton>
-      <ToolButton active={textMode} onClick={onTextMode} title={t('reader.selectText')}>
+      </DockButton>
+      <DockButton active={textMode} onClick={onTextMode} title={t('reader.selectText')} testId="tool-text-select">
         <TextCursorInput size={18} />
-      </ToolButton>
+      </DockButton>
       <Divider />
 
       {/* Tablets/desktop: colours and sizes inline. */}
@@ -145,18 +219,18 @@ export default function Toolbar({
       </div>
 
       {/* Phones: behind one button showing the current colour and size. */}
-      <span ref={penBtn} className="shrink-0 sm:hidden">
+      <span ref={colorBtn} className="shrink-0 sm:hidden">
         <button
           type="button"
           title={t('canvas.penColor')}
-          onClick={() => setPenMenu((v) => !v)}
-          className="flex h-9 items-center gap-1.5 rounded-lg px-2 hover:bg-neutral-200/70 dark:hover:bg-neutral-700/70"
+          onClick={() => setMenu(menu === 'color' ? null : 'color')}
+          className="flex h-10 items-center gap-1.5 rounded-xl px-2 hover:bg-neutral-200/60 dark:hover:bg-neutral-700/60"
         >
-          <span className="h-6 w-6 rounded-full" style={{ backgroundColor: active.color, opacity: isHl ? 0.85 : 1, filter: inkFilter }} />
+          <span className="h-6 w-6 rounded-full ring-2 ring-white/70" style={{ backgroundColor: active.color, opacity: isHl ? 0.9 : 1, filter: inkFilter }} />
           <span className="rounded-full" style={{ width: Math.min(12, 3 + active.size), height: Math.min(12, 3 + active.size), backgroundColor: active.color, filter: inkFilter }} />
         </button>
       </span>
-      <Popover anchorRef={penBtn} open={penMenu} onClose={() => setPenMenu(false)} className="w-64 p-3">
+      <Popover anchorRef={colorBtn} open={menu === 'color'} onClose={() => setMenu(null)} className="w-64 p-3">
         <div className="flex flex-col gap-3">
           <Swatches colors={colors} {...common} wrap />
           <Sizes sizes={sizes} {...common} />
@@ -164,29 +238,84 @@ export default function Toolbar({
       </Popover>
       <Divider className="sm:hidden" />
 
-      <ToolButton onClick={onUndo} title={t('canvas.undo')}>
+      <DockButton onClick={onUndo} title={t('canvas.undo')} testId="undo">
         <Undo2 size={18} />
-      </ToolButton>
-      <ToolButton onClick={onRedo} title={t('canvas.redo')}>
+      </DockButton>
+      <DockButton onClick={onRedo} title={t('canvas.redo')} testId="redo">
         <Redo2 size={18} />
-      </ToolButton>
+      </DockButton>
+      <Divider />
 
-      <div className="min-w-2 flex-1" />
-
-      {isHl && (
-        <ToolButton active={snapText} onClick={onToggleSnapText} title={t('reader.snapTextHint')}>
-          <Sparkles size={18} />
-          <span className="hidden lg:inline">{t('reader.snapText')}</span>
-        </ToolButton>
-      )}
-      <ToolButton active={shapeSnap} onClick={onToggleShapeSnap} title={t('canvas.shapeSnapHint')}>
-        <Shapes size={18} />
-        <span className="hidden lg:inline">{t('canvas.shapeSnap')}</span>
-      </ToolButton>
-      <ToolButton active={fingerDraws} onClick={onToggleFinger} title={fingerDraws ? t('canvas.fingerDraws') : t('canvas.fingerScrolls')}>
+      <DockButton active={fingerDraws} onClick={onToggleFinger} title={fingerDraws ? t('canvas.fingerDraws') : t('canvas.fingerScrolls')} testId="finger-toggle">
         {fingerDraws ? <Pointer size={18} /> : <Hand size={18} />}
-        <span className="hidden lg:inline">{fingerDraws ? t('canvas.fingerDrawsShort') : t('canvas.fingerScrollsShort')}</span>
-      </ToolButton>
+      </DockButton>
+      <span ref={toolsBtn} className="shrink-0">
+        <DockButton active={!!otherTool} onClick={() => setMenu(menu === 'tools' ? null : 'tools')} title={t('reader.moreTools')} testId="tools-menu" className="gap-1">
+          {CurrentToolIcon ? <CurrentToolIcon size={18} /> : otherTool?.startsWith('cut') ? (cutMode === 'freeform' ? FreeformSelectIcon : RectSelectIcon) : <Shapes size={18} />}
+          <ChevronDown size={13} className="opacity-70" />
+        </DockButton>
+      </span>
+      <span ref={optionsBtn} className="shrink-0">
+        <DockButton onClick={() => setMenu(menu === 'options' ? null : 'options')} title={t('reader.drawingOptions')} testId="drawing-options">
+          <SlidersHorizontal size={18} />
+        </DockButton>
+      </span>
+
+      <Popover anchorRef={toolsBtn} open={menu === 'tools'} onClose={() => setMenu(null)} align="center" className="w-[17.5rem] p-2.5">
+        <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-widest text-neutral-400">{t('reader.moreTools')}</div>
+        <div className="grid grid-cols-4 gap-1.5">
+          {TOOLS.map(([type, Icon, label]) => (
+            <button
+              key={type}
+              type="button"
+              data-testid={`tool-${type}`}
+              title={t(`reader.tool.${label}`)}
+              onClick={choose(() => onTool(type))}
+              className={`flex flex-col items-center gap-1 rounded-2xl px-1 py-2.5 text-[11px] transition ${
+                otherTool === type ? 'bg-accent text-white shadow-soft' : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700/60'
+              }`}
+            >
+              <Icon size={19} />
+              {t(`reader.tool.${label}`)}
+            </button>
+          ))}
+          {[
+            ['rect', RectSelectIcon, 'cutRect'],
+            ['freeform', FreeformSelectIcon, 'cutFree'],
+          ].map(([mode, icon, label]) => (
+            <button
+              key={mode}
+              type="button"
+              data-testid={`tool-cut-${mode}`}
+              title={t(`reader.tool.${label}`)}
+              onClick={choose(() => onCut(mode))}
+              className={`flex flex-col items-center gap-1 rounded-2xl px-1 py-2.5 text-[11px] transition ${
+                cutMode === mode && otherTool ? 'bg-accent text-white shadow-soft' : 'text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700/60'
+              }`}
+            >
+              {icon}
+              {t(`reader.tool.${label}`)}
+            </button>
+          ))}
+        </div>
+        <p className="mt-2 px-1 text-[11px] leading-snug text-neutral-400">{t('reader.cutHint')}</p>
+      </Popover>
+
+      <Popover anchorRef={optionsBtn} open={menu === 'options'} onClose={() => setMenu(null)} align="end" className="w-72 p-2">
+        {[
+          [shapeSnap, onToggleShapeSnap, t('canvas.shapeSnap'), t('canvas.shapeSnapHint'), Shapes],
+          [snapText, onToggleSnapText, t('reader.snapText'), t('reader.snapTextHint'), Sparkles],
+        ].map(([on, toggle, label, hint, Icon]) => (
+          <button key={label} type="button" onClick={toggle} className="flex w-full items-start gap-3 rounded-xl px-2.5 py-2 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700/60">
+            <Icon size={17} className="mt-0.5 shrink-0 text-neutral-500" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">{label}</span>
+              <span className="mt-0.5 block text-xs leading-snug text-neutral-500">{hint}</span>
+            </span>
+            <Switch checked={on} />
+          </button>
+        ))}
+      </Popover>
     </div>
   );
 }

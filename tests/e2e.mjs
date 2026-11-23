@@ -18,6 +18,7 @@ import {
   inkPixels,
   RED,
   lightMode,
+  testDefaults,
   drawStroke,
   waitUntil,
   sleep,
@@ -43,6 +44,7 @@ async function main() {
       ['export', scenarioExport],
       ['share', scenarioShare],
       ['reading', scenarioReading],
+      ['style', scenarioStyle],
       ['pen', scenarioPen],
       ['tools', scenarioTools],
       ['library', scenarioLibrary],
@@ -65,6 +67,7 @@ async function scenarioLocal(browser, state) {
   section('A PDF kept on this device only');
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
+  await testDefaults(page);
   const requests = [];
   const errors = [];
   page.on('request', (r) => requests.push(r.url()));
@@ -237,7 +240,7 @@ async function scenarioCloud(browser, state) {
     if (fileRequests.has(e.requestId)) bytesB.file += e.dataLength;
   });
   // Don't keep a copy after the first open: this device should stream the book.
-  await B.evaluateOnNewDocument(() => localStorage.setItem('quarc_reader_settings', JSON.stringify({ autoCache: false })));
+  await testDefaults(B, { autoCache: false });
   await login(B, 'bob');
   await waitUntil(async () => (await dumpDb(B)).docs?.length === 1, { timeout: 30000, label: 'the document to appear on device B' });
   const dbB0 = await dumpDb(B);
@@ -748,9 +751,7 @@ async function scenarioReading(browser, state) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   // A finger scrolls (instead of drawing) so touch gestures can be tested as reading gestures.
-  await page.evaluateOnNewDocument(() => {
-    if (!localStorage.getItem('quarc_reader_settings')) localStorage.setItem('quarc_reader_settings', JSON.stringify({ fingerMode: 'scroll' }));
-  });
+  await testDefaults(page, { fingerMode: 'scroll' });
   await login(page, 'gina');
   await chooseOnImport(page, book, 'device only');
   await readerReady(page);
@@ -796,7 +797,7 @@ async function scenarioReading(browser, state) {
   await page.evaluate(() => document.body.click());
   const start = (await indicator(page)).split('/')[0];
   await shot(page, '51-book-mode');
-  const zoomText = await page.evaluate(() => [...document.querySelectorAll('.zoom-button')].map((b) => b.textContent).join('') || document.querySelector('.layer-ui__wrapper__footer-left')?.innerText);
+  const zoomText = await page.evaluate(() => document.querySelector('[data-testid="zoom-level"]')?.textContent || '');
   check('book mode shows one whole page, fitted to the screen', /\d+%/.test(zoomText) && parseInt(zoomText.match(/(\d+)%/)[1], 10) < 120, zoomText);
 
   await page.keyboard.press('ArrowRight');
@@ -837,11 +838,12 @@ async function scenarioReading(browser, state) {
   await sleep(4500); // the reading position is saved a moment after you stop
   const prog = (await dumpDb(page)).docs[0];
   check('the reading position is saved with the document', prog.progress?.page === Number(start) + 5, JSON.stringify(prog.progress));
-  check('and the chosen reading mode', prog.settings?.mode === 'book', JSON.stringify(prog.settings));
+  // The reading style is picked every time a document is opened (see scenarioStyle), so it is not stored with it.
+  check('the reading style is not stored with the document', prog.settings?.mode === undefined, JSON.stringify(prog.settings));
   await page.reload({ waitUntil: 'networkidle0' });
   await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: 'the book to reopen' });
   await waitIndicator(page, target, 'the book to reopen on the same page');
-  check('reopening resumes on the same page in book mode', true);
+  check('reopening resumes on the same page', true);
   await shot(page, '52-resumed');
 
   check('no page errors', errors.length === 0, errors.join('\n'));
@@ -849,6 +851,86 @@ async function scenarioReading(browser, state) {
 }
 
 // --------------------------------------------------------------------------------------------------
+
+// The out-of-the-box behaviour (no test defaults): sepia paper, and "scroll or book?" on every opening.
+async function scenarioStyle(browser, state) {
+  section('Reading style is asked on every opening; sepia paper by default');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page, { defaults: false });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const settings = () => page.evaluate(() => JSON.parse(localStorage.getItem('quarc_reader_settings') || '{}'));
+  const remembered = async () => ['scroll', 'book'].includes((await settings()).readMode);
+  const openFirstFromLibrary = async () => {
+    await page.goto(`${BASE}/`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('.cursor-pointer', { timeout: 10000 });
+    await page.evaluate(() => document.querySelector('.cursor-pointer')?.click());
+  };
+  // The paper's colour, sampled where the page is blank.
+  const paperPixel = () =>
+    page.evaluate(() => {
+      const c = document.querySelector('.quarc-canvas-page canvas');
+      const d = c.getContext('2d').getImageData(Math.round(c.width * 0.5), Math.round(c.height * 0.5), 1, 1).data;
+      return [d[0], d[1], d[2]];
+    });
+
+  await login(page, 'sara');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await page.waitForSelector('[data-testid="style-scroll"]', { timeout: 30000 });
+  check('a document asks "scroll or book?" before it opens', !!(await page.$('[data-testid="style-book"]')));
+  check('...and nothing is drawn until you choose', (await paperStats(page)) === null);
+  check('"remember my choice" starts unticked', (await page.$eval('[data-testid="style-remember"]', (el) => el.checked)) === false);
+  await shot(page, '70-reading-style');
+
+  // Book, not remembered.
+  await page.click('[data-testid="style-book"]');
+  await readerReady(page);
+  const [r, g, b] = await paperPixel();
+  check('the paper is sepia out of the box', r > 232 && r < 252 && g > 222 && g < 245 && b < 226 && r - b > 18, `rgb(${r},${g},${b})`);
+  const zoom = await page.$eval('[data-testid="zoom-level"]', (el) => parseInt(el.textContent, 10));
+  check('book mode shows a whole page, fitted', zoom < 120, `${zoom}%`);
+  check('a choice that was not remembered is not stored as the default', !(await remembered()));
+  await shot(page, '71-book-sepia');
+
+  // Not remembered: asked again.
+  await openFirstFromLibrary();
+  await page.waitForSelector('[data-testid="style-scroll"]', { timeout: 15000 });
+  check('opening it again asks again', true);
+
+  // Scroll, remembered.
+  await page.click('[data-testid="style-remember"]');
+  await page.click('[data-testid="style-scroll"]');
+  await readerReady(page);
+  check('"remember my choice" stores the style as the default', (await settings()).readMode === 'scroll', JSON.stringify(await settings()));
+  const zoomScroll = await page.$eval('[data-testid="zoom-level"]', (el) => parseInt(el.textContent, 10));
+  check('scroll mode fits the page width (zoomed in, unlike book)', zoomScroll > zoom, `${zoomScroll}% vs ${zoom}%`);
+
+  await openFirstFromLibrary();
+  await readerReady(page);
+  check('with a remembered style the document opens straight away', !(await page.$('[data-testid="style-scroll"]')));
+
+  // Settings: put the question back.
+  await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle0' });
+  const pressed = () => page.$$eval('button[aria-pressed="true"]', (els) => els.map((e) => e.innerText.trim()));
+  const before = await pressed();
+  check('Settings shows the remembered style and sepia as the paper', before.includes('Scroll') && before.includes('Sepia'), before.join());
+  await page.evaluate(() => [...document.querySelectorAll('button[aria-pressed]')].find((x) => x.innerText.trim() === 'Ask me')?.click());
+  await sleep(300);
+  check('"Ask me" in Settings goes back to asking', (await settings()).readMode === 'ask', JSON.stringify(await settings()));
+  await shot(page, '72-settings');
+  await openFirstFromLibrary();
+  await page.waitForSelector('[data-testid="style-scroll"]', { timeout: 15000 });
+  check('...and the question comes back', true);
+
+  // The dialog can be left without choosing.
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((x) => /Back to library/.test(x.innerText))?.click());
+  await page.waitForFunction(() => location.pathname === '/', { timeout: 10000 });
+  check('"Back to library" leaves without opening it', true);
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
 
 // A stylus: pointer events with pointerType 'pen' and a pressure per sample.
 async function penStroke(cdp, pts, { buttons = 1, button = 'left' } = {}) {
@@ -877,7 +959,7 @@ async function scenarioPen(browser, state) {
     return { x: r.x, y: r.y };
   });
 
-  const toolbarText = () => page.$eval('.quarc-canvas-page', (el) => el.parentElement.innerText);
+  const toolbarText = () => page.$eval('[data-testid="finger-toggle"]', (el) => el.title);
   check('before any stylus is seen a finger draws (a phone has no pen)', /Finger draws/.test(await toolbarText()));
 
   await page.click('button[aria-label="#e03131"]');
@@ -928,7 +1010,13 @@ async function scenarioTools(browser, state) {
     return { x: r.x, y: r.y };
   });
   const elements = async () => ((await dumpDb(page)).ann || []).flatMap((r) => JSON.parse(r.ink_json).elements).filter((e) => !e.isDeleted);
-  const tool = (name) => page.click(`[data-testid="toolbar-${name}"]`);
+  // The pen has its own button on the dock; every other tool is in the Tools flyout.
+  const tool = async (name) => {
+    if (name === 'freedraw') return page.click('[data-testid="tool-pen"]');
+    await page.click('[data-testid="tools-menu"]');
+    await page.waitForSelector(`[data-testid="tool-${name}"]`, { visible: true });
+    return page.click(`[data-testid="tool-${name}"]`);
+  };
 
   // ----- hold the pen still at the end of a stroke: it becomes a clean line -----
   await page.click('button[aria-label="#1971c2"]');
@@ -975,7 +1063,7 @@ async function scenarioTools(browser, state) {
   await drawStroke(page, { x: box.x + 200, y: box.y + 640 }, { x: box.x + 700, y: box.y + 644 }, 20);
   await sleep(1500);
   const before = (await elements()).filter((e) => e.type === 'freedraw').length;
-  await page.click('.quarc-selection-tool label');
+  await tool('cut-rect');
   await page.mouse.move(box.x + 380, box.y + 610);
   await page.mouse.down();
   await page.mouse.move(box.x + 520, box.y + 680, { steps: 8 });

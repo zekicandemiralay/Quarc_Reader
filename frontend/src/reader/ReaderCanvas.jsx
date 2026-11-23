@@ -1,9 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Excalidraw, newElementWith, CaptureUpdateAction, reconcileElements, getSceneVersion } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { useTranslation } from 'react-i18next';
-import { ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Maximize2, Minimize2 } from 'lucide-react';
 import { strokeToFreedrawElement } from '../lib/freehandElement';
 import { strokeToPath2D, STROKE_OPTIONS } from '../lib/freehand';
 import { recognizeShape, adjustShape, shapeOutline } from '../lib/shapeRecognition';
@@ -33,6 +31,7 @@ import { TextLayerManager } from './textLayers';
 import { drawPaper, drawMarks, DARK_FILTER, DESK } from './paper';
 import { newMark, mergeMarks, updateMark, deleteMark, hitMark, activeMarks } from './marks';
 import Toolbar from './Toolbar';
+import PageBar from './PageBar';
 import SelectionBar from './SelectionBar';
 import MarkPopover from './MarkPopover';
 
@@ -66,22 +65,6 @@ const UI_OPTIONS = {
     clearCanvas: false, // would erase every page at once
   },
 };
-
-const RectSelectIcon = (
-  <svg viewBox="0 0 20 20" width={20} height={20} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <rect x="3.5" y="5" width="13" height="10" rx="1" strokeDasharray="2.5 2.5" />
-  </svg>
-);
-const FreeformSelectIcon = (
-  <svg viewBox="0 0 20 20" width={20} height={20} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M4.5 9.7c-.4-3.1 2.6-5.3 5.4-4.9 3.1.5 5.7 2.1 5.4 5.2-.3 2.9-3.1 4.7-5.9 4.6-2.3-.1-4.6-1.9-4.9-4.9z" strokeDasharray="2.5 2.5" />
-  </svg>
-);
-const ChevronDownIcon = (
-  <svg viewBox="0 0 10 6" width={10} height={6} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M1 1l4 4 4-4" />
-  </svg>
-);
 
 function isEraserButton(e) {
   return e.pointerType === 'pen' && ((e.buttons & 32) !== 0 || (e.buttons & 2) !== 0 || e.button === 5 || e.button === 2);
@@ -148,9 +131,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const [textMode, setTextMode] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectionTool, setSelectionTool] = useState(null);
-  const [selectionVariant, setSelectionVariant] = useState('rect');
-  const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
-  const [toolbarPortalEl, setToolbarPortalEl] = useState(null);
+  const [zoomPct, setZoomPct] = useState(100);
   const [selBar, setSelBar] = useState(null); // { anchor, items } while text is selected
   const [markPop, setMarkPop] = useState(null); // { pageKey, mark, anchor }
 
@@ -274,6 +255,11 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       setCurrentIndex(index);
       onPageChange?.(index);
     }
+    const pct = Math.round(view.zoom * 100);
+    if (pct !== zoomPctRef.current) {
+      zoomPctRef.current = pct;
+      setZoomPct(pct);
+    }
     clearTimeout(positionTimer.current);
     positionTimer.current = setTimeout(reportPosition, POSITION_DELAY_MS);
 
@@ -282,6 +268,20 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   }
   const textNeededRef = useRef(false);
   textNeededRef.current = textNeeded;
+  const zoomPctRef = useRef(100);
+
+  // The zoom buttons of the page bar: zoom about the middle of the screen.
+  function zoomBy(factor) {
+    stopInitialView();
+    const v = currentView();
+    const rect = sizeRef.current;
+    if (!v || !rect.width) return;
+    const { min, max } = zoomLimits();
+    const zoom = Math.min(Math.max(v.zoom * factor, min), max);
+    const cx = rect.width / 2 / v.zoom - v.scrollX;
+    const cy = rect.height / 2 / v.zoom - v.scrollY;
+    applyView({ zoom, ...clampView(rect.width / 2 / zoom - cx, rect.height / 2 / zoom - cy, zoom) });
+  }
 
   // Restricts Excalidraw's drawing canvases (the ink, not its toolbar) to one
   // page's rectangle, or lifts the restriction.
@@ -721,8 +721,8 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       const pts = sel.points;
       ctx.save();
       ctx.setLineDash([6, 4]);
-      ctx.strokeStyle = '#6965db';
-      ctx.fillStyle = 'rgba(105, 101, 219, 0.08)';
+      ctx.strokeStyle = '#7c3aed';
+      ctx.fillStyle = 'rgba(124, 58, 237, 0.08)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       if (sel.mode === 'rect') {
@@ -1246,7 +1246,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     // edited) must keep working normally with every pointer type.
     // (Not simply "is a canvas": in book mode the ink canvases are clipped to the page, so a
     // touch in the margin beside it lands on whatever is underneath.)
-    const onUi = !!e.target.closest?.('button, input, textarea, select, a, label, .Island, [role=dialog], [data-selection-bar], aside');
+    const onUi = !!e.target.closest?.('button, input, textarea, select, a, label, .Island, [role=dialog], [data-selection-bar], [data-overlay], aside');
     const onSurface = !onUi && !!containerRef.current?.contains(e.target);
     const onText = !!e.target.closest?.('.quarc-text-layer');
     if (!onSurface && !(textModeRef.current && onText)) return;
@@ -1628,49 +1628,21 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     if (activeToolType !== 'selection') setSelectionTool(null);
   }, [activeToolType]);
 
-  function selectTool(modeName) {
-    setSelectionTool((prev) => {
-      const next = prev === modeName ? null : modeName;
-      if (next) apiRef.current?.setActiveTool({ type: 'selection' });
-      return next;
-    });
+  // The dock's "Tools" flyout: any of Excalidraw's own tools (its toolbar is hidden)...
+  function chooseTool(type) {
+    setTextMode(false);
+    clearTextSelection();
+    setSelectionTool(null);
+    apiRef.current?.setActiveTool({ type });
   }
 
-  function chooseSelectionVariant(modeName) {
-    setSelectionVariant(modeName);
-    setSelectionMenuOpen(false);
+  // ...or the cut selection (rectangle or free-form).
+  function chooseCut(modeName) {
+    setTextMode(false);
+    clearTextSelection();
     setSelectionTool(modeName);
     apiRef.current?.setActiveTool({ type: 'selection' });
   }
-
-  useEffect(() => {
-    if (!selectionMenuOpen) return undefined;
-    const handleOutside = (e) => {
-      if (!e.target.closest?.('.quarc-selection-tool')) setSelectionMenuOpen(false);
-    };
-    document.addEventListener('pointerdown', handleOutside, true);
-    return () => document.removeEventListener('pointerdown', handleOutside, true);
-  }, [selectionMenuOpen]);
-
-  // Excalidraw's tool row (".App-toolbar > .Stack_horizontal") is a real,
-  // persistent DOM node; our selection button is portaled into it so it
-  // looks and behaves like a native tool.
-  useEffect(() => {
-    if (readOnly) return undefined;
-    let cancelled = false;
-    let raf;
-    const poll = () => {
-      if (cancelled) return;
-      const el = containerRef.current?.querySelector('.App-toolbar > .Stack_horizontal');
-      if (el) setToolbarPortalEl(el);
-      else raf = requestAnimationFrame(poll);
-    };
-    raf = requestAnimationFrame(poll);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-    };
-  }, [readOnly]);
 
   // Cuts every stroke/shape crossing the drawn region at its boundary and
   // selects the inside pieces as one group (see canvas/selectionCut.js).
@@ -1768,45 +1740,6 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     setSelectionTool(null);
   }
 
-  function renderSelectionToolButton() {
-    if (!toolbarPortalEl || readOnly) return null;
-    const icon = selectionVariant === 'freeform' ? FreeformSelectIcon : RectSelectIcon;
-    return createPortal(
-      <div className="quarc-selection-tool" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
-        <label className="ToolIcon" title={t('canvas.selectionTool')}>
-          <input type="radio" className="ToolIcon_type_radio ToolIcon_size_medium" checked={selectionTool === selectionVariant} onChange={() => selectTool(selectionVariant)} />
-          <div className="ToolIcon__icon">{icon}</div>
-        </label>
-        <button type="button" className="quarc-selection-tool__caret" title={t('canvas.selectionToolVariant')} onClick={() => setSelectionMenuOpen((v) => !v)}>
-          {ChevronDownIcon}
-        </button>
-        {selectionMenuOpen && (
-          <div className="dropdown-menu quarc-selection-tool__menu">
-            <div className="dropdown-menu-container Island" style={{ '--padding': 2 }}>
-              {[
-                ['rect', RectSelectIcon, t('canvas.rectSelect')],
-                ['freeform', FreeformSelectIcon, t('canvas.freeSelect')],
-              ].map(([modeName, ic, label]) => (
-                <button
-                  key={modeName}
-                  type="button"
-                  className={`dropdown-menu-item dropdown-menu-item-base${selectionVariant === modeName ? ' dropdown-menu-item--selected' : ''}`}
-                  onClick={() => chooseSelectionVariant(modeName)}
-                >
-                  <div className="dropdown-menu-item__text">
-                    {ic}
-                    {label}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>,
-      toolbarPortalEl
-    );
-  }
-
   // ---------- the owner's handle on the canvas ----------
 
   useImperativeHandle(ref, () => ({
@@ -1871,33 +1804,12 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   // ---------- render ----------
 
   const inkFilter = dark ? DARK_INK_FILTER : undefined;
-  const desk = dark ? DESK.dark : paper === 'sepia' ? DESK.sepia : DESK.light;
+  const desk = dark ? DESK.dark : paper === 'sepia' ? DESK.sepia : DESK.white;
   const n = layout.n;
   const showToolbar = !readOnly && chrome;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {showToolbar && (
-        <Toolbar
-          drawMode={isDrawTool ? tool : null}
-          textMode={textMode}
-          onDrawMode={selectDrawMode}
-          onTextMode={toggleTextMode}
-          pen={{ color: penColor, size: penSize }}
-          highlighter={{ color: hlColor, size: hlSize }}
-          onPenChange={changePen}
-          onHighlighterChange={changeHighlighter}
-          snapText={snapText}
-          onToggleSnapText={() => updatePrefs({ snapText: !snapText })}
-          shapeSnap={shapeSnap}
-          onToggleShapeSnap={() => updatePrefs({ shapeSnap: !shapeSnap })}
-          fingerDraws={fingerDraws}
-          onToggleFinger={() => updatePrefs({ fingerMode: fingerDraws ? 'scroll' : 'draw' })}
-          onUndo={undo}
-          onRedo={redo}
-          inkFilter={inkFilter}
-        />
-      )}
       <div
         ref={containerRef}
         className={`quarc-reader-surface quarc-canvas-page relative min-h-0 flex-1 overflow-hidden ${isDrawTool ? 'quarc-pen-active' : ''} ${textMode ? 'quarc-text-mode' : ''} ${chrome ? 'quarc-chrome' : ''}`}
@@ -1912,18 +1824,30 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         }}
       >
         <style>{`
+          /* Excalidraw's own chrome is replaced by the dock and the page bar: its tool island, its
+             main menu / library / help buttons, its zoom + undo footer and the "scroll back" hint. */
+          .quarc-canvas-page .App-toolbar-container,
+          .quarc-canvas-page .App-bottom-bar,
+          .quarc-canvas-page .mobile-misc-tools-container,
+          .quarc-canvas-page .main-menu-trigger,
+          .quarc-canvas-page .sidebar-trigger,
+          .quarc-canvas-page .help-icon,
+          .quarc-canvas-page .layer-ui__wrapper__footer,
+          .quarc-canvas-page .scroll-back-to-content,
+          .quarc-canvas-page .undo-redo-buttons,
+          .quarc-canvas-page .zoom-actions { display: none !important; }
           .quarc-canvas-page.quarc-pen-active .App-menu__left { display: none !important; }
-          .quarc-canvas-page .main-menu-trigger, .quarc-canvas-page .sidebar-trigger, .quarc-canvas-page .help-icon { display: none !important; }
-          .quarc-canvas-page:not(.quarc-chrome) .layer-ui__wrapper .App-toolbar-container, .quarc-canvas-page:not(.quarc-chrome) .App-menu__left { display: none !important; }
+          .quarc-canvas-page:not(.quarc-chrome) .App-menu__left { display: none !important; }
           .quarc-canvas-page.quarc-text-mode .layer-ui__wrapper { display: none !important; }
           .quarc-canvas-page.quarc-text-mode .excalidraw canvas { pointer-events: none !important; }
-          .quarc-canvas-page .excalidraw { --color-primary: #f59e0b; --color-primary-darker: #d97706; --color-primary-darkest: #b45309; --color-primary-light: #fef3c7; --color-primary-light-darker: #fde68a; --color-primary-hover: #d97706; }
-          .quarc-canvas-page .excalidraw.theme--dark { --color-primary-light: #78350f; --color-primary-light-darker: #92400e; }
-          .quarc-canvas-page .quarc-selection-tool { margin-left: 2px; }
-          .quarc-canvas-page .quarc-selection-tool__caret { width: 14px; align-self: stretch; display: flex; align-items: center; justify-content: center; border: 0; background: transparent; cursor: pointer; color: var(--color-on-surface); border-radius: var(--border-radius-md); }
-          .quarc-canvas-page .quarc-selection-tool__caret:hover { background-color: var(--button-hover-bg); }
-          .quarc-canvas-page .quarc-selection-tool__menu { left: 0; z-index: 2; min-width: 9.5rem; }
-          .quarc-canvas-page .quarc-selection-tool__menu .dropdown-menu-container { display: flex; flex-direction: column; gap: 2px; padding: 4px; }
+          /* What is left of Excalidraw's UI (the style panel for shapes) wears the app's colours. */
+          .quarc-canvas-page .excalidraw {
+            --color-primary: #7c3aed; --color-primary-darker: #6d28d9; --color-primary-darkest: #5b21b6;
+            --color-primary-light: #f1e9ff; --color-primary-light-darker: #e2d3ff; --color-primary-hover: #6d28d9;
+            --island-bg-color: #fffdf9; --border-radius-lg: 1rem; --border-radius-md: 0.7rem;
+            --shadow-island: 0 12px 32px -10px rgb(36 22 66 / 0.35), 0 3px 8px rgb(36 22 66 / 0.10);
+          }
+          .quarc-canvas-page .excalidraw.theme--dark { --color-primary-light: #3b2570; --color-primary-light-darker: #4a2f8a; --island-bg-color: #272333; }
         `}</style>
         <canvas ref={paperRef} className="pointer-events-none absolute inset-0" style={{ filter: dark ? DARK_FILTER : undefined }} />
         <canvas ref={marksCanvasRef} className="pointer-events-none absolute inset-0" style={{ mixBlendMode: dark ? 'normal' : 'multiply' }} />
@@ -1948,6 +1872,32 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         />
         <canvas ref={overlayRef} className="pointer-events-none absolute inset-0" style={{ filter: inkFilter }} />
         <div ref={textRootRef} className="absolute inset-0 overflow-hidden" style={{ pointerEvents: 'none', zIndex: 3 }} />
+
+        {showToolbar && (
+          <Toolbar
+            drawMode={isDrawTool ? tool : null}
+            textMode={textMode}
+            onDrawMode={selectDrawMode}
+            onTextMode={toggleTextMode}
+            pen={{ color: penColor, size: penSize }}
+            highlighter={{ color: hlColor, size: hlSize }}
+            onPenChange={changePen}
+            onHighlighterChange={changeHighlighter}
+            snapText={snapText}
+            onToggleSnapText={() => updatePrefs({ snapText: !snapText })}
+            shapeSnap={shapeSnap}
+            onToggleShapeSnap={() => updatePrefs({ shapeSnap: !shapeSnap })}
+            fingerDraws={fingerDraws}
+            onToggleFinger={() => updatePrefs({ fingerMode: fingerDraws ? 'scroll' : 'draw' })}
+            onUndo={undo}
+            onRedo={redo}
+            inkFilter={inkFilter}
+            activeTool={activeToolType}
+            cutMode={selectionTool}
+            onTool={chooseTool}
+            onCut={chooseCut}
+          />
+        )}
 
         {selBar && textMode && (
           <SelectionBar
@@ -1978,42 +1928,18 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
           />
         )}
 
-        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-[4] flex justify-center">
-          <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-neutral-200 bg-white/90 p-1 text-sm shadow-lg backdrop-blur dark:border-neutral-700 dark:bg-neutral-800/90">
-            <button
-              type="button"
-              title={t('canvas.prevPage')}
-              disabled={currentIndex === 0}
-              onClick={() => turnPage(-1)}
-              className="rounded-full p-1.5 text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 dark:text-neutral-300 dark:hover:bg-neutral-700"
-            >
-              {mode === 'book' ? <ChevronLeft size={16} /> : <ChevronUp size={16} />}
-            </button>
-            <span className="min-w-[4rem] text-center tabular-nums text-neutral-700 dark:text-neutral-200">
-              {currentIndex + 1} / {n}
-            </span>
-            <button
-              type="button"
-              title={t('canvas.nextPage')}
-              disabled={currentIndex >= n - 1}
-              onClick={() => turnPage(1)}
-              className="rounded-full p-1.5 text-neutral-600 hover:bg-neutral-100 disabled:opacity-30 dark:text-neutral-300 dark:hover:bg-neutral-700"
-            >
-              {mode === 'book' ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-            </button>
-            {onToggleChrome && (
-              <button
-                type="button"
-                title={chrome ? t('reader.hideBars') : t('reader.showBars')}
-                onClick={onToggleChrome}
-                className="rounded-full p-1.5 text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-700"
-              >
-                {chrome ? <Maximize2 size={15} /> : <Minimize2 size={15} />}
-              </button>
-            )}
-          </div>
-        </div>
-        {renderSelectionToolButton()}
+        <PageBar
+          mode={mode}
+          index={currentIndex}
+          n={n}
+          zoomPct={zoomPct}
+          onPrev={() => turnPage(-1)}
+          onNext={() => turnPage(1)}
+          onGoTo={(i) => goToPage(i)}
+          onZoom={zoomBy}
+          chrome={chrome}
+          onToggleChrome={onToggleChrome}
+        />
       </div>
     </div>
   );

@@ -18,11 +18,11 @@ export default function MarkPopover({ mark, anchor, container, readOnly, onChang
 
   return (
     <div
-      className="absolute z-[6] flex w-[300px] flex-col gap-2 rounded-xl border border-neutral-200 bg-white p-2 shadow-xl dark:border-neutral-700 dark:bg-neutral-800"
+      className="absolute z-[6] flex w-[300px] flex-col gap-2 rounded-2xl border border-neutral-200/80 bg-surface/95 p-3 shadow-float backdrop-blur-xl dark:border-neutral-700 dark:bg-neutral-800/95"
       style={{ left: pos.left, top: pos.top }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {mark.text && <p className="line-clamp-3 px-1 text-xs italic text-neutral-500 dark:text-neutral-400">“{mark.text}”</p>}
+      {mark.text && <p className="line-clamp-3 px-1 font-serif text-[13px] italic leading-snug text-neutral-500 dark:text-neutral-400">“{mark.text}”</p>}
       {readOnly ? (
         mark.note && <p className="px-1 text-sm">{mark.note}</p>
       ) : (
@@ -48,13 +48,13 @@ export default function MarkPopover({ mark, anchor, container, readOnly, onChang
                 key={type}
                 type="button"
                 onClick={() => onChange({ type })}
-                className={`rounded-lg p-1.5 ${mark.type === type ? 'bg-accent text-white' : 'hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
+                className={`rounded-xl p-1.5 ${mark.type === type ? 'bg-accent text-white' : 'hover:bg-neutral-100 dark:hover:bg-neutral-700'}`}
               >
                 <Icon size={15} />
               </button>
             ))}
             <div className="flex-1" />
-            <button type="button" title={t('common.close')} className="rounded-lg p-1.5 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-700" onClick={onClose}>
+            <button type="button" title={t('common.close')} className="rounded-xl p-1.5 text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-700" onClick={onClose}>
               <X size={15} />
             </button>
           </div>
@@ -64,19 +64,19 @@ export default function MarkPopover({ mark, anchor, container, readOnly, onChang
             onBlur={commitNote}
             placeholder={t('reader.notePlaceholder')}
             rows={2}
-            className="resize-none rounded-lg border border-neutral-300 bg-transparent p-2 text-sm outline-none focus:border-accent dark:border-neutral-600"
+            className="resize-none rounded-xl border border-neutral-300 bg-transparent p-2.5 text-sm outline-none focus:border-accent dark:border-neutral-600"
           />
           <div className="flex items-center justify-between">
             <button
               type="button"
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700"
+              className="flex items-center gap-1 rounded-xl px-2 py-1 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-700"
               onClick={() => navigator.clipboard?.writeText(mark.text || '').catch(() => {})}
             >
               <Copy size={14} /> {t('common.copy')}
             </button>
             <button
               type="button"
-              className="flex items-center gap-1 rounded-lg px-2 py-1 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40"
+              className="flex items-center gap-1 rounded-xl px-2 py-1 text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40"
               onClick={() => {
                 commitNote();
                 onDelete();

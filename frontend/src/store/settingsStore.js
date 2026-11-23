@@ -4,10 +4,15 @@ import { create } from 'zustand';
 // the other Quarc apps' settings stores.
 const KEY = 'quarc_reader_settings';
 
+// Bump when a default changes in a way that should reach people who already have settings saved
+// (every update() saves the whole object, so an old default would otherwise stay forever).
+const SETTINGS_VERSION = 2;
+
 const DEFAULTS = {
+  settingsVersion: SETTINGS_VERSION,
   theme: 'system', // 'light' | 'dark' | 'system'
   // Paper: how the page itself looks while reading.
-  paperMode: 'auto', // 'auto' (white in light mode, dark in dark mode) | 'white' | 'sepia' | 'dark'
+  paperMode: 'sepia', // 'sepia' | 'white' | 'dark' | 'auto' (follow the theme: white in light mode, dark in dark mode)
   // Handwriting (same as Quarc Notes)
   fingerMode: 'auto', // 'auto' | 'draw' | 'scroll' — auto: draw until a stylus is used here, then scroll
   penSeen: false, // a stylus has been used on this device
@@ -24,13 +29,20 @@ const DEFAULTS = {
   libraryView: 'grid', // 'grid' | 'list'
   librarySort: 'recent', // 'recent' | 'title' | 'added'
   // Reading
-  readMode: 'scroll', // 'scroll' | 'book' — the default for documents that have none of their own
+  readMode: 'ask', // 'ask' (every time a document is opened) | 'scroll' | 'book'
   pageTurn: 'swipe', // book mode: 'swipe' | 'tap' (tap the screen edges) | 'both'
 };
 
 function load() {
   try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(KEY) || '{}') };
+    const stored = JSON.parse(localStorage.getItem(KEY) || '{}');
+    // Settings saved before version 2 hold the old defaults (white paper, scroll): drop those two
+    // so the new defaults apply once. Anything the person set since is kept.
+    if ((stored.settingsVersion || 1) < SETTINGS_VERSION) {
+      delete stored.readMode;
+      delete stored.paperMode;
+    }
+    return { ...DEFAULTS, ...stored, settingsVersion: SETTINGS_VERSION };
   } catch {
     return { ...DEFAULTS };
   }

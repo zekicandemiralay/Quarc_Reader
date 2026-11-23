@@ -57,7 +57,7 @@ export default function Popover({ anchorRef, open, onClose, align = 'start', cla
     <div
       ref={panelRef}
       style={{ position: 'fixed', left: pos?.left ?? -9999, top: pos?.top ?? -9999, zIndex: 1000 }}
-      className={`rounded-xl border border-neutral-200 bg-white p-1.5 text-sm text-neutral-800 shadow-xl dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 ${className}`}
+      className={`rounded-2xl border border-neutral-200/80 bg-surface p-1.5 text-sm text-neutral-800 shadow-float dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 ${className}`}
     >
       {children}
     </div>,
@@ -71,11 +71,11 @@ export function MenuItem({ icon: Icon, children, onClick, danger, active, disabl
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition disabled:opacity-40 ${
+      className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left transition disabled:opacity-40 ${
         danger
           ? 'text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-500/10'
           : active
-            ? 'bg-accent/15 text-accent-dark dark:text-accent'
+            ? 'bg-accent-soft text-accent-dark dark:bg-accent/20 dark:text-accent-ring'
             : 'hover:bg-neutral-100 dark:hover:bg-neutral-700/60'
       }`}
     >

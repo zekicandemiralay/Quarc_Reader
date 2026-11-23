@@ -20,12 +20,12 @@ function Toast({ item }) {
     return () => clearTimeout(timer);
   }, [item.id, item.duration]);
   return (
-    <div className="pointer-events-auto flex max-w-md items-center gap-3 rounded-xl bg-neutral-900 px-4 py-3 text-sm text-white shadow-2xl dark:bg-neutral-100 dark:text-neutral-900">
+    <div className="pointer-events-auto flex max-w-md items-center gap-3 rounded-2xl bg-neutral-900/95 px-4 py-3 text-sm text-neutral-50 shadow-float backdrop-blur dark:bg-neutral-100/95 dark:text-neutral-900">
       <span className="flex-1">{item.message}</span>
       {item.action && (
         <button
           type="button"
-          className="font-semibold text-amber-400 hover:underline dark:text-amber-700"
+          className="rounded-lg px-2 py-0.5 font-semibold text-accent-ring hover:bg-white/10 dark:text-accent-dark dark:hover:bg-black/5"
           onClick={() => {
             item.action.onClick();
             dismissToast(item.id);
@@ -34,7 +34,7 @@ function Toast({ item }) {
           {item.action.label}
         </button>
       )}
-      <button type="button" onClick={() => dismissToast(item.id)} className="opacity-60 hover:opacity-100">
+      <button type="button" onClick={() => dismissToast(item.id)} className="opacity-60 hover:opacity-100" aria-label="Dismiss">
         <X size={16} />
       </button>
     </div>
@@ -44,7 +44,7 @@ function Toast({ item }) {
 export default function Toasts() {
   const toasts = useToasts((s) => s.toasts);
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[1200] flex flex-col items-center gap-2 px-3">
+    <div className="pointer-events-none fixed inset-x-0 bottom-20 z-[1200] flex flex-col items-center gap-2 px-3">
       {toasts.map((item) => (
         <Toast key={item.id} item={item} />
       ))}

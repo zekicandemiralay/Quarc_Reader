@@ -32,9 +32,12 @@ document from the server and from your other devices; this device keeps the file
 
 ## Reading
 
-- **Scroll mode** — the pages run down the screen. **Book mode** — one whole page at a time; swipe, tap the left/right edge,
-  or use the arrow keys / Page Up / Page Down. Switch in the **View** menu (top right), which also has the paper
-  (white / sepia / dark) and how pages turn.
+- **Scroll or book?** Every time you open a document the reader asks how you want to read it. **Scroll** — the pages run
+  down the screen. **Book** — one whole page at a time; swipe, tap the left/right edge, or use the arrow keys / Page Up /
+  Page Down. Tick **Remember my choice** to stop being asked; change or undo that in **Settings → Reading → Reading style**
+  (*Ask me / Scroll / Book*). The **View** menu (top right) switches style for the current reading only.
+- **Paper** is sepia by default. Pick white, dark, or "follow theme" as the default in **Settings → Reading → Paper**; the
+  **View** menu changes it for one document.
 - Double-tap fits the page (and, on a fitted page, zooms to its width); pinch to zoom as far as you need for fine handwriting.
 - Your place is remembered, and follows you to your other devices for synced documents.
 - **Bookmark** this page with the ribbon icon; the list icon shows your bookmarks, highlights and notes.
@@ -42,8 +45,10 @@ document from the server and from your other devices; this device keeps the file
 
 ## Writing and highlighting
 
-The toolbar above the page has **Pen**, **Highlighter** and **Select text**, with colours and sizes. The tool island
-floating on the page has everything else (shapes, arrows, text, eraser, image…), plus the **cut selection** tool.
+The floating dock at the top of the page has **Pen**, **Highlighter** and **Select text**, with colours and sizes, undo/redo and
+the **Finger** switch. The **Tools** button next to it opens everything else (shapes, arrows, text, eraser, image…) plus
+the **cut selection** tools; the slider icon has **Snap shapes** and **Snap to text**. The bar at the bottom turns pages,
+jumps to any page (tap the counter) and zooms.
 
 - **Pencil / stylus:** pressure-sensitive. The first time a stylus touches the screen, fingers switch to scrolling so a
   resting hand never draws (switch it back with the **Finger** button). Hold the pen still at the end of a stroke to snap it

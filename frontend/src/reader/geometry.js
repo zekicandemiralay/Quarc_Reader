@@ -12,9 +12,9 @@ export const PX_PER_PT = 96 / 72;
 export const PAGE_GAP = 40; // scene px between sheets
 export const MAX_ZOOM = 8;
 export const MIN_ZOOM = 0.05;
-// Screen px kept clear around the pages: the toolbar floats over the top and
-// the page indicator over the bottom.
-export const INSETS = { top: 64, bottom: 64, side: 16 };
+// Screen px kept clear around the pages: the tool dock floats over the top (about 64 px with its
+// margin) and the page bar over the bottom (about 60 px), each with a little air to the page.
+export const INSETS = { top: 76, bottom: 72, side: 16 };
 
 export const NOTE_SIZES = {
   A4: { w: 595, h: 842 },
