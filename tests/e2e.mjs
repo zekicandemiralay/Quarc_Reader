@@ -1,0 +1,1229 @@
+// Browser tests: the real backend + the production build + headless Chrome.
+// Run: npm run build (in ../frontend), then npm test (here). Screenshots go to
+// $E2E_OUT (default: the OS temp dir) so a failure can be looked at.
+import {
+  startStack,
+  stopStack,
+  launch,
+  BASE,
+  check,
+  section,
+  summary,
+  makeTestPdf,
+  writePdf,
+  login,
+  dumpDb,
+  shot,
+  paperStats,
+  inkPixels,
+  RED,
+  lightMode,
+  drawStroke,
+  waitUntil,
+  sleep,
+  OUT,
+} from './harness.mjs';
+
+const only = process.argv[2]; // optional: run a single scenario by name
+
+async function main() {
+  console.log(`output: ${OUT}`);
+  await startStack();
+  const browser = await launch();
+  const state = {
+    pdfPath: writePdf('test.pdf', await makeTestPdf()),
+    bigPdfPath: writePdf('test-big.pdf', await makeTestPdf({ junkBytes: 6 * 1024 * 1024 })),
+  };
+
+  try {
+    const scenarios = [
+      ['local', scenarioLocal],
+      ['cloud', scenarioCloud],
+      ['marks', scenarioMarks],
+      ['export', scenarioExport],
+      ['share', scenarioShare],
+      ['reading', scenarioReading],
+      ['pen', scenarioPen],
+      ['tools', scenarioTools],
+      ['library', scenarioLibrary],
+      ['big', scenarioBig],
+    ];
+    for (const [name, fn] of scenarios) {
+      if (only && only !== name) continue;
+      await fn(browser, state);
+    }
+  } finally {
+    await browser.close();
+    stopStack();
+  }
+  process.exit(summary() ? 1 : 0);
+}
+
+// --------------------------------------------------------------------------------------------------
+
+async function scenarioLocal(browser, state) {
+  section('A PDF kept on this device only');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  const requests = [];
+  const errors = [];
+  page.on('request', (r) => requests.push(r.url()));
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(`console: ${m.text()}`);
+  });
+
+  await login(page);
+  await page.waitForSelector('text/Your library is empty', { timeout: 10000 }).catch(() => {});
+  check('library opens empty after login', (await page.content()).includes('Your library is empty'));
+  await shot(page, '01-library-empty');
+
+  // Add a PDF: the app must ASK where it should live.
+  const [chooser] = await Promise.all([page.waitForFileChooser(), page.click('header button:has(svg.lucide-plus)').catch(() => page.evaluate(() => document.querySelector('header button.bg-accent')?.click()))]);
+  await chooser.accept([state.pdfPath]);
+  await page.waitForSelector('div[class*="z-[1100]"] [role=dialog]', { timeout: 15000 });
+  const dialogText = await page.$eval('div[class*="z-[1100]"] [role=dialog]', (el) => el.innerText);
+  check('adding a PDF asks local vs sync', /device only/i.test(dialogText) && /Sync with my server/i.test(dialogText), dialogText);
+  await shot(page, '02-import-dialog');
+
+  const before = requests.length;
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => /device only/i.test(b.innerText))?.click());
+  await page.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 30000 });
+  check('after choosing, the document opens in the reader', true);
+
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { timeout: 30000, label: 'the PDF page to be drawn on the paper canvas' });
+  const stats = await paperStats(page);
+  check('the PDF is drawn on the paper (text pixels present)', stats.dark > 500, JSON.stringify(stats));
+  await sleep(600);
+  await shot(page, '03-reader');
+
+  const idx = await page.$eval('.quarc-canvas-page', (el) => el.parentElement.innerText);
+  check('page indicator shows 1 / 3', /1\s*\/\s*3/.test(idx), idx.slice(0, 200));
+
+  const db = await dumpDb(page);
+  check('the document is stored locally as local-only', db.docs?.length === 1 && db.docs[0].sync === 'local', JSON.stringify(db.docs?.map((d) => d.sync)));
+  check('title and author were read from the PDF', db.docs[0].title === 'Moby Dick (test)' && db.docs[0].author === 'H. Melville', `${db.docs[0].title} / ${db.docs[0].author}`);
+  check('page count and sizes were measured', db.docs[0].page_count === 3 && JSON.stringify(db.docs[0].sizes) === '[[3,595,842]]', JSON.stringify(db.docs[0].sizes));
+  check('a cover thumbnail was made', typeof db.docs[0].thumb === 'string' && db.docs[0].thumb.startsWith('data:image/jpeg'));
+  check('the file itself is stored on the device', db.blobs?.length === 1);
+
+  // Privacy: nothing about this document may have left the device.
+  await sleep(2500);
+  // (A GET /api/sync/pull is only the catch-up for documents synced from elsewhere; it says nothing about local ones.)
+  const leaked = requests.filter((u) => /\/api\/(files|shares)|\/api\/sync\/push/.test(u));
+  check('a local-only document makes no push, file or share requests', leaked.length === 0, leaked.join('\n'));
+  check('and nothing is queued to send', (db.outbox || []).length === 0);
+
+  // ----- writing on it -----
+  await lightMode(page);
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { timeout: 30000, label: 'the page to draw again after a reload' });
+  await sleep(500);
+  await shot(page, '04-reader-light');
+
+  const redBefore = await inkPixels(page, RED);
+  await page.click('button[aria-label="#e03131"]');
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  });
+  await drawStroke(page, { x: box.x + 200, y: box.y + 420 }, { x: box.x + 600, y: box.y + 430 });
+  await sleep(1500);
+  const redAfter = await inkPixels(page, RED);
+  check('a pen stroke shows up as red ink on the page', redAfter > redBefore + 200, `${redBefore} -> ${redAfter}`);
+
+  let rows = (await dumpDb(page)).ann || [];
+  check('the stroke is stored for page 1 only', rows.length === 1 && rows[0].page_key === 'p0', JSON.stringify(rows.map((r) => r.page_key)));
+  const ink = JSON.parse(rows[0]?.ink_json || '{"elements":[]}');
+  const el = ink.elements[0];
+  check('it is a freehand element in PAGE-LOCAL coordinates', el?.type === 'freedraw' && el.x > 0 && el.x < 794 && el.y > 0 && el.y < 1123, JSON.stringify(el && { x: el.x, y: el.y, type: el.type }));
+  check('still nothing queued for a local-only document', (await dumpDb(page)).outbox.length === 0);
+
+  // reload: the ink must come back
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { timeout: 30000, label: 'reader after reload' });
+  await sleep(800);
+  const redReloaded = await inkPixels(page, RED);
+  check('after a reload the ink is still there', redReloaded > redBefore + 200, `${redReloaded}`);
+  await shot(page, '05-ink-persisted');
+
+  // page 2: ink drawn there belongs to page 2, and page 1's row is untouched
+  const p0Before = rows[0]?.ink_json;
+  await page.click('button[title="Next page"]');
+  await sleep(700);
+  await drawStroke(page, { x: box.x + 200, y: box.y + 400 }, { x: box.x + 500, y: box.y + 410 });
+  await sleep(1500);
+  rows = (await dumpDb(page)).ann || [];
+  const keys = rows.map((r) => r.page_key).sort();
+  check('a stroke drawn on page 2 is stored under page 2', keys.join() === 'p0,p1', keys.join());
+  check("and page 1's stored ink is unchanged", rows.find((r) => r.page_key === 'p0')?.ink_json === p0Before);
+  await shot(page, '06-page-2');
+
+  check('no page errors', errors.filter((e) => !/401/.test(e)).length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+const serverPull = (page, since = '') =>
+  page.evaluate(async (s) => (await fetch(`/api/sync/pull?since=${encodeURIComponent(s)}`, { credentials: 'include' })).json(), since);
+
+async function chooseOnImport(page, pdfPath, label) {
+  const [chooser] = await Promise.all([page.waitForFileChooser(), page.evaluate(() => document.querySelector('header button.bg-accent')?.click())]);
+  await chooser.accept([pdfPath]);
+  await page.waitForSelector('div[class*="z-[1100]"] [role=dialog]', { timeout: 15000 });
+  await page.evaluate((l) => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.innerText.includes(l))?.click(), label);
+}
+
+async function readerReady(page) {
+  await page.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 30000 });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { timeout: 30000, label: 'the PDF to be drawn' });
+  await sleep(500);
+}
+
+async function scenarioCloud(browser, state) {
+  section('A synced PDF, and a second device');
+  const ctxA = await browser.createBrowserContext();
+  const A = await ctxA.newPage();
+  await lightMode(A);
+  const errorsA = [];
+  A.on('pageerror', (e) => errorsA.push(e.message));
+  await login(A, 'bob');
+  await chooseOnImport(A, state.bigPdfPath, 'Sync with my server');
+  await readerReady(A);
+
+  let pull = await waitUntil(async () => {
+    const p = await serverPull(A);
+    return p.docs?.length === 1 && p.docs[0].file_ready ? p : null;
+  }, { timeout: 30000, label: 'the document and its file to reach the server' });
+  const doc = pull.docs[0];
+  check('the document reached the server with its metadata', doc.title === 'Moby Dick (test)' && doc.page_count === 3 && doc.author === 'H. Melville');
+  check('the PDF was uploaded and verified', doc.file_ready === true && !!doc.file_sha256);
+  const status = await A.evaluate(async (sha) => (await fetch(`/api/files/${sha}/status`, { credentials: 'include' })).json(), doc.file_sha256);
+  check('the server has exactly the file that was added', status.exists === true && status.size === doc.file_size);
+  const dbA = await dumpDb(A);
+  check('the local copy is marked synced and the outbox drained', dbA.docs[0].sync === 'cloud' && dbA.outbox.length === 0, JSON.stringify(dbA.outbox));
+
+  // ink on device A reaches the server
+  await A.click('button[aria-label="#e03131"]');
+  const box = await A.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  await drawStroke(A, { x: box.x + 200, y: box.y + 420 }, { x: box.x + 600, y: box.y + 430 });
+  pull = await waitUntil(async () => {
+    const p = await serverPull(A);
+    return p.anns?.some((a) => a.page_key === 'p0' && a.ink.elements.length) ? p : null;
+  }, { timeout: 30000, label: "device A's stroke to reach the server" });
+  check("device A's stroke reached the server, per page", pull.anns.length === 1 && pull.anns[0].page_key === 'p0');
+
+  // ----- device B: a brand-new browser profile, same account -----
+  const ctxB = await browser.createBrowserContext();
+  const B = await ctxB.newPage();
+  await lightMode(B);
+  const errorsB = [];
+  const requestsB = [];
+  B.on('pageerror', (e) => errorsB.push(e.message));
+  B.on('request', (r) => requestsB.push({ url: r.url(), range: r.headers().range }));
+  // Bytes that really arrived for the file (not the size a response header announced).
+  const bytesB = { file: 0 };
+  const cdp = await B.createCDPSession();
+  await cdp.send('Network.enable');
+  const fileRequests = new Set();
+  cdp.on('Network.requestWillBeSent', (e) => {
+    if (/\/api\/files\/[0-9a-f]{64}$/.test(e.request.url)) fileRequests.add(e.requestId);
+  });
+  cdp.on('Network.dataReceived', (e) => {
+    if (fileRequests.has(e.requestId)) bytesB.file += e.dataLength;
+  });
+  // Don't keep a copy after the first open: this device should stream the book.
+  await B.evaluateOnNewDocument(() => localStorage.setItem('quarc_reader_settings', JSON.stringify({ autoCache: false })));
+  await login(B, 'bob');
+  await waitUntil(async () => (await dumpDb(B)).docs?.length === 1, { timeout: 30000, label: 'the document to appear on device B' });
+  const dbB0 = await dumpDb(B);
+  check('device B receives the library entry (and nothing else yet)', dbB0.docs[0].sync === 'cloud' && dbB0.docs[0].title === 'Moby Dick (test)' && (dbB0.blobs || []).length === 0);
+  await B.waitForSelector('img[src^="data:image/jpeg"]', { timeout: 10000 }).catch(() => {});
+  await shot(B, '10-device-b-library');
+  check('the cover thumbnail travelled with it', (await B.$('img[src^="data:image/jpeg"]')) !== null);
+
+  await B.evaluate(() => document.querySelector('.cursor-pointer')?.click());
+  await readerReady(B);
+  const ranged = requestsB.filter((r) => /\/api\/files\//.test(r.url) && r.range);
+  check('device B reads the PDF from the server in byte ranges', ranged.length > 0, requestsB.filter((r) => /api\/files/.test(r.url)).map((r) => `${r.url.slice(-12)} ${r.range}`).join('\n'));
+  await sleep(1500); // would a background download have started by now?
+  check('...and has fetched only a small part of the 6 MB file to show page 1', bytesB.file < 2 * 1024 * 1024, `${bytesB.file} bytes`);
+  await sleep(1000);
+  const redB = await inkPixels(B, RED);
+  check("device A's ink is on device B's page", redB > 200, `${redB} red pixels`);
+  await shot(B, '11-device-b-reader');
+  check('with caching off, device B keeps no copy of the file', ((await dumpDb(B)).blobs || []).length === 0);
+  // ...until asked: More > Download for offline reading
+  await B.evaluate(() => [...document.querySelectorAll('header button')].find((b) => b.getAttribute('aria-label') === 'More')?.click());
+  await B.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Download for offline/.test(b.innerText)), { timeout: 5000 });
+  await B.evaluate(() => [...document.querySelectorAll('button')].find((b) => /Download for offline/.test(b.innerText))?.click());
+  await waitUntil(async () => ((await dumpDb(B)).blobs || []).length === 1, { timeout: 30000, label: 'the book to be downloaded for offline reading' });
+  const cached = (await dumpDb(B)).blobs[0];
+  check('"Download for offline reading" keeps the whole verified file on device B', cached.size > 6 * 1024 * 1024 && cached.sha256 === doc.file_sha256, `${cached.size}`);
+
+  // live: a stroke on B shows up on A while A has the page open
+  const redA0 = await inkPixels(A, RED);
+  await B.click('button[aria-label="#e03131"]');
+  const boxB = await B.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  await drawStroke(B, { x: boxB.x + 200, y: boxB.y + 500 }, { x: boxB.x + 600, y: boxB.y + 510 });
+  await waitUntil(async () => {
+    const p = await serverPull(B);
+    return p.anns.find((a) => a.page_key === 'p0')?.ink.elements.filter((e) => !e.isDeleted).length === 2;
+  }, { timeout: 30000, label: "device B's stroke to reach the server" });
+  await A.evaluate(() => window.dispatchEvent(new Event('online'))); // sync now instead of waiting 20s
+  await waitUntil(async () => (await inkPixels(A, RED)) > redA0 + 200, { timeout: 30000, label: "device B's stroke to appear on device A" });
+  check("device B's stroke appears on device A while it is open (merged, nothing lost)", true);
+  await shot(A, '12-device-a-merged');
+  const aInk = JSON.parse((await dumpDb(A)).ann[0].ink_json).elements.filter((e) => !e.isDeleted);
+  check('device A now holds both strokes', aInk.length === 2, `${aInk.length}`);
+
+  // stopping sync on A removes the server copy and B's copy, and A keeps everything
+  await A.evaluate(() => [...document.querySelectorAll('header button')].find((b) => b.getAttribute('aria-label') === 'More')?.click());
+  await A.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /Stop syncing/.test(b.innerText)), { timeout: 5000 });
+  await A.evaluate(() => [...document.querySelectorAll('button')].find((b) => /Stop syncing/.test(b.innerText))?.click());
+  await A.waitForSelector('div[class*="z-[1100]"] [role=dialog]');
+  await shot(A, '13-stop-sync-dialog');
+  await A.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.innerText.trim() === 'Stop syncing')?.click());
+  await waitUntil(async () => (await serverPull(A)).docs.length === 0, { timeout: 30000, label: 'the server copy to be removed' });
+  check('"Stop syncing" removes the document from the server', true);
+  const dbA2 = await dumpDb(A);
+  check('device A keeps the file, the document and its ink, now local-only', dbA2.docs[0].sync === 'local' && dbA2.blobs.length === 1 && dbA2.ann.length === 1 && dbA2.outbox.length === 0, JSON.stringify({ sync: dbA2.docs[0].sync, outbox: dbA2.outbox.length }));
+  await B.evaluate(() => window.dispatchEvent(new Event('online')));
+  await waitUntil(async () => (await dumpDb(B)).docs.length === 0, { timeout: 30000, label: 'device B to drop the document' });
+  check('device B drops it on its next sync', true);
+
+  check('no page errors on either device', errorsA.length + errorsB.length === 0, [...errorsA, ...errorsB].join('\n'));
+  await ctxA.close();
+  await ctxB.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+// Pixels of a colour on the highlight layer (the second canvas in the reader).
+const marksPixels = (page, testSource) =>
+  page.evaluate((src) => {
+    const test = new Function('r', 'g', 'b', 'a', `return (${src});`);
+    const canvas = document.querySelectorAll('.quarc-canvas-page > canvas')[1];
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let n = 0;
+    for (let i = 0; i < data.length; i += 4) if (test(data[i], data[i + 1], data[i + 2], data[i + 3])) n++;
+    return n;
+  }, testSource);
+const YELLOW = 'a > 200 && r > 230 && g > 180 && b < 110';
+
+// The on-screen rectangle of the text layer's span that starts with `prefix`.
+const spanRect = (page, prefix) =>
+  page.evaluate((p) => {
+    const span = [...document.querySelectorAll('.quarc-text-layer span')].find((s) => s.textContent.trim().startsWith(p));
+    if (!span) return null;
+    const r = span.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  }, prefix);
+
+const marksOf = async (page) => {
+  const rows = (await dumpDb(page)).ann || [];
+  return rows.flatMap((r) => JSON.parse(r.marks_json).map((m) => ({ ...m, page_key: r.page_key })));
+};
+
+async function scenarioMarks(browser, state) {
+  section('Highlighting text');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await login(page, 'carol');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+
+  // ----- select text, highlight it -----
+  await page.click('button[aria-label="Select text to highlight"]');
+  await waitUntil(() => spanRect(page, 'Call me Ishmael'), { label: 'the text layer to appear' });
+  check('text mode puts selectable text over the page', true);
+  await page.evaluate(() => {
+    const span = [...document.querySelectorAll('.quarc-text-layer span')].find((s) => s.textContent.trim().startsWith('Call me Ishmael'));
+    getSelection().selectAllChildren(span);
+  });
+  await page.waitForSelector('button[aria-label="Highlight"]', { timeout: 5000 });
+  await shot(page, '20-selection-bar');
+  check('selecting text shows the highlight bar', true);
+  await page.click('button[aria-label="Highlight"]');
+  await sleep(1500);
+
+  let marks = await marksOf(page);
+  check('the highlight is stored as a mark on page 1', marks.length === 1 && marks[0].type === 'hl' && marks[0].page_key === 'p0', JSON.stringify(marks.map((m) => [m.type, m.page_key])));
+  check('with the highlighted words', /Call me Ishmael/.test(marks[0]?.text), marks[0]?.text);
+  const [rx, ry, rw, rh] = marks[0].rects[0];
+  check('and PAGE-LOCAL line rectangles', rx > 0 && rx < 794 && ry > 0 && ry < 1123 && rw > 100 && rh > 8 && rh < 40, JSON.stringify(marks[0].rects));
+  check('a text highlight leaves no ink behind', ((await dumpDb(page)).ann || []).every((r) => JSON.parse(r.ink_json).elements.length === 0));
+  const yellow = await marksPixels(page, YELLOW);
+  check('the highlight is painted on the page', yellow > 1500, `${yellow} yellow pixels`);
+  await shot(page, '21-highlighted');
+
+  // ----- tap it to add a note -----
+  const r = await spanRect(page, 'Call me Ishmael');
+  await page.mouse.click(r.x + r.w / 2, r.y + r.h / 2);
+  await page.waitForSelector('textarea[placeholder="Write a note…"]', { timeout: 5000 });
+  await shot(page, '22-mark-popover');
+  await page.type('textarea[placeholder="Write a note…"]', 'the famous opening');
+  await page.evaluate(() => document.querySelector('textarea[placeholder="Write a note…"]').blur());
+  await sleep(1500);
+  marks = await marksOf(page);
+  check('tapping a highlight opens it, and a typed note is saved on it', marks[0]?.note === 'the famous opening', JSON.stringify(marks[0]));
+
+  // ----- the notes list -----
+  await page.click('button[aria-label="Notes and highlights"]');
+  await sleep(500);
+  const panel = await page.$eval('aside', (el) => el.innerText);
+  check('the notes panel lists the highlight with its note and page', /Call me Ishmael/.test(panel) && /the famous opening/.test(panel) && /Page 1/.test(panel), panel);
+  await shot(page, '23-notes-panel');
+  await page.click('button[aria-label="Close"]');
+
+  // ----- survives a reload -----
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: 'reader after reload' });
+  await sleep(800);
+  check('highlights are still painted after a reload', (await marksPixels(page, YELLOW)) > 1500);
+
+  // ----- pencil highlighter snaps to the words under it -----
+  await page.click('button[aria-label="Highlighter"]');
+  await waitUntil(() => spanRect(page, 'to interest me'), { label: 'text geometry in highlighter mode' });
+  await sleep(500);
+  const line = await spanRect(page, 'to interest me');
+  const before = (await marksOf(page)).length;
+  // "to interest me on shore, I thought I would sail about a little": from partway into
+  // "interest" to partway into "shore," (about 8% .. 38% of the line).
+  await drawStroke(page, { x: line.x + line.w * 0.09, y: line.y + line.h / 2 }, { x: line.x + line.w * 0.36, y: line.y + line.h / 2 + 1 }, 14);
+  await sleep(1800);
+  marks = await marksOf(page);
+  check('a highlighter stroke over text becomes a real text highlight', marks.length === before + 1, `${before} -> ${marks.length}`);
+  const snapped = marks[marks.length - 1];
+  const lineWords = 'to interest me on shore, I thought I would sail about a little'.split(' ');
+  const words = (snapped?.text || '').split(' ');
+  check('it covers the words the pencil passed over', /interest/.test(snapped?.text) && /shore/.test(snapped?.text), snapped?.text);
+  check('snapped to WHOLE words (no half-words at either end)', words.length > 0 && words.every((w) => lineWords.includes(w)), snapped?.text);
+  check('and it is not freehand ink', ((await dumpDb(page)).ann || []).every((row) => JSON.parse(row.ink_json).elements.length === 0));
+  await shot(page, '24-pencil-snap');
+
+  // strokes over blank paper stay freehand ink (well clear of Excalidraw's corner controls)
+  await drawStroke(page, { x: line.x + 40, y: line.y + 150 }, { x: line.x + 300, y: line.y + 155 }, 10);
+  await sleep(1800);
+  const inkRows = ((await dumpDb(page)).ann || []).filter((row) => JSON.parse(row.ink_json).elements.length > 0);
+  check('a highlighter stroke over blank paper stays freehand ink', inkRows.length === 1);
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+// Opens a header menu and clicks the item whose text matches.
+async function menuClick(page, menuLabel, itemRe) {
+  await page.evaluate((l) => [...document.querySelectorAll('header button')].find((b) => b.getAttribute('aria-label') === l)?.click(), menuLabel);
+  await page.waitForFunction((src) => [...document.querySelectorAll('button')].some((b) => new RegExp(src).test(b.innerText)), { timeout: 5000 }, itemRe);
+  await page.evaluate((src) => [...document.querySelectorAll('button')].find((b) => new RegExp(src).test(b.innerText))?.click(), itemRe);
+}
+
+async function waitForDownload(dir, ext = '.pdf', timeout = 30000) {
+  const { readdirSync, statSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  return waitUntil(() => {
+    const f = readdirSync(dir).find((n) => n.endsWith(ext) && !n.endsWith('.crdownload') && /annotated/.test(n));
+    return f && statSync(join(dir, f)).size > 0 ? join(dir, f) : null;
+  }, { timeout, label: 'the downloaded PDF' });
+}
+
+async function scenarioExport(browser, state) {
+  section('Note pages, and saving the PDF');
+  const { mkdtempSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { PDFDocument, PDFName, PDFDict, PDFArray } = await import('pdf-lib');
+  const downloads = mkdtempSync(join(tmpdir(), 'quarc-reader-dl-'));
+  const ctx = await browser.createBrowserContext();
+  // Downloads in an isolated context need the setting scoped to that context.
+  const bsession = await browser.target().createCDPSession();
+  await bsession.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, browserContextId: ctx.id });
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await login(page, 'dave');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+
+  // ink on page 1
+  await page.click('button[aria-label="#e03131"]');
+  await drawStroke(page, { x: box.x + 200, y: box.y + 420 }, { x: box.x + 600, y: box.y + 430 });
+  // a highlight with a note on page 1
+  await page.click('button[aria-label="Select text to highlight"]');
+  await waitUntil(() => spanRect(page, 'Call me Ishmael'), { label: 'text layer' });
+  await page.evaluate(() => getSelection().selectAllChildren([...document.querySelectorAll('.quarc-text-layer span')].find((s) => s.textContent.trim().startsWith('Call me Ishmael'))));
+  await page.waitForSelector('button[aria-label="Add a note"]');
+  await page.click('button[aria-label="Add a note"]');
+  await page.type('textarea[placeholder="Write a note…"]', 'opening line — Türkçe çğış');
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Save')?.click());
+  await sleep(1200);
+  await page.click('button[aria-label="Select text to highlight"]'); // back to the pen
+
+  // a note page after page 1, with a stroke on it
+  await menuClick(page, 'More', 'Insert a note page here');
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Lined'), { timeout: 5000 });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Lined')?.click());
+  await waitUntil(async () => /2\s*\/\s*4/.test(await page.$eval('.quarc-canvas-page', (el) => el.parentElement.innerText)), { label: 'the page indicator to show 2 / 4' }).catch(async (err) => {
+    await shot(page, '30-note-page-FAILED');
+    console.log('  layout:', JSON.stringify((await dumpDb(page)).docs[0]?.layout), '| text:', (await page.$eval('.quarc-canvas-page', (el) => el.parentElement.innerText)).replace(/\n/g, ' ').slice(-80));
+    throw err;
+  });
+  check('inserting a note page makes the document one page longer and jumps to it', true);
+  await sleep(1000);
+  await shot(page, '30-note-page');
+  await drawStroke(page, { x: box.x + 300, y: box.y + 300 }, { x: box.x + 700, y: box.y + 330 });
+  await sleep(1500);
+
+  let db = await dumpDb(page);
+  const noteItem = (db.docs[0].layout || []).find((it) => it.t === 'n');
+  check('the document now has a layout with the note page in it', !!noteItem && db.docs[0].layout.length === 4, JSON.stringify(db.docs[0].layout));
+  check("the note page's ink is stored under the note page, not a PDF page", db.ann.some((r) => r.page_key === `n${noteItem.id}` && JSON.parse(r.ink_json).elements.length === 1), db.ann.map((r) => r.page_key).join());
+  check('page 1 still holds its own ink and highlight', db.ann.some((r) => r.page_key === 'p0' && JSON.parse(r.ink_json).elements.length === 1 && JSON.parse(r.marks_json).length === 1));
+
+  // ----- save a copy -----
+  await menuClick(page, 'More', 'Save PDF');
+  await page.waitForSelector('div[class*="z-[1100]"] [role=dialog]');
+  await shot(page, '31-export-dialog');
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => /Save a copy/.test(b.innerText))?.click());
+  const file = await waitForDownload(downloads).catch(async (err) => {
+    const { readdirSync } = await import('node:fs');
+    console.log('  dialog:', (await page.$eval('div[class*="z-[1100]"] [role=dialog]', (el) => el.innerText).catch(() => '(closed)')).replace(/\n/g, ' | ').slice(0, 400));
+    console.log('  downloads dir:', JSON.stringify(readdirSync(downloads)), '| errors:', errors.join(' / '));
+    await shot(page, '31-export-FAILED');
+    throw err;
+  });
+  const out = await PDFDocument.load(readFileSync(file));
+  check('the saved PDF has the note page as a real page (4 pages)', out.getPageCount() === 4, `${out.getPageCount()}`);
+  check('the note page has its own size', Math.abs(out.getPage(1).getSize().width - 595) < 2 && Math.abs(out.getPage(1).getSize().height - 842) < 2, JSON.stringify(out.getPage(1).getSize()));
+  const annots = (i) => {
+    const arr = out.getPage(i).node.Annots();
+    const list = [];
+    if (arr) for (let k = 0; k < arr.size(); k++) list.push(out.context.lookup(arr.get(k), PDFDict));
+    return list;
+  };
+  const kinds = annots(0).map((a) => a.get(PDFName.of('Subtype')).toString());
+  check('page 1 carries a real PDF highlight and a sticky note', kinds.includes('/Highlight') && kinds.includes('/Text'), kinds.join());
+  const note = annots(0).find((a) => a.get(PDFName.of('Subtype')).toString() === '/Text');
+  check('with the typed note, Turkish letters intact', note?.get(PDFName.of('Contents')).decodeText() === 'opening line — Türkçe çğış', note?.get(PDFName.of('Contents')).decodeText());
+  check('the original document in the library is untouched', (await dumpDb(page)).docs[0].file_sha256 === db.docs[0].file_sha256 && !(await dumpDb(page)).docs[0].orig_sha256);
+  await page.waitForFunction(() => !document.querySelector('div[class*="z-[1100]"] [role=dialog]'), { timeout: 10000 });
+
+  // ----- replace the original -----
+  await menuClick(page, 'More', 'Save PDF');
+  await page.waitForSelector('div[class*="z-[1100]"] [role=dialog]');
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => /Replace the original/.test(b.innerText))?.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].some((b) => b.innerText.trim() === 'Replace'), { timeout: 5000 });
+  await shot(page, '32-replace-confirm');
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.innerText.trim() === 'Replace')?.click());
+  await waitUntil(async () => (await dumpDb(page)).docs[0].orig_sha256, { timeout: 40000, label: 'the replacement to be stored' });
+  db = await dumpDb(page);
+  check('the library document is now the annotated file, with the old one kept as a safety net', db.docs[0].file_sha256 !== db.docs[0].orig_sha256 && db.docs[0].page_count === 4 && db.docs[0].layout === null, JSON.stringify({ pages: db.docs[0].page_count, layout: db.docs[0].layout }));
+  check('both files are on the device', db.blobs.length === 2);
+  await waitUntil(async () => (await page.$eval('.quarc-canvas-page', (el) => el.parentElement.innerText)).includes('/ 4'), { label: 'reader reloaded with 4 pages' });
+  await sleep(1500);
+  const live = db.ann.flatMap((r) => JSON.parse(r.ink_json).elements.filter((e) => !e.isDeleted)).length + db.ann.flatMap((r) => JSON.parse(r.marks_json).filter((m) => !m.del)).length;
+  check('the ink and highlights are now part of the pages — no longer separate annotations', live === 0, `${live} live items`);
+  await page.click('button[title="Next page"]').catch(() => {});
+  await page.click('button[title="Previous page"]').catch(() => {});
+  await sleep(800);
+  const stats = await paperStats(page);
+  check("the red ink is drawn into the page itself (it is on the paper layer now)", stats.colored > 300, JSON.stringify(stats));
+  await shot(page, '33-replaced');
+
+  // ----- revert -----
+  await menuClick(page, 'More', 'Save PDF');
+  await page.waitForSelector('div[class*="z-[1100]"] [role=dialog]');
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => /Revert to the original/.test(b.innerText))?.click());
+  await waitUntil(async () => !(await dumpDb(page)).docs[0].orig_sha256, { timeout: 30000, label: 'the revert' });
+  db = await dumpDb(page);
+  check('reverting brings back the original file and its page count', db.docs[0].page_count === 3 && db.docs[0].file_sha256 === (await import('node:crypto')).createHash('sha256').update(readFileSync(state.pdfPath)).digest('hex'), JSON.stringify({ pages: db.docs[0].page_count }));
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+const MODAL = 'div[class*="z-[1100]"] [role=dialog]';
+
+async function scenarioShare(browser, state) {
+  section('Sharing a link');
+  const ctxA = await browser.createBrowserContext();
+  await ctxA.overridePermissions(BASE, ['clipboard-read', 'clipboard-write']);
+  const A = await ctxA.newPage();
+  await lightMode(A);
+  const errors = [];
+  A.on('pageerror', (e) => errors.push(`A: ${e.message}`));
+  // Headless Chrome refuses clipboard writes, so the dialog falls back to showing the link in a
+  // browser prompt (right for a user); here that would block the page, so dismiss it.
+  A.on('dialog', (d) => d.dismiss().catch(() => {}));
+  await login(A, 'frank');
+  await chooseOnImport(A, state.pdfPath, 'Sync with my server');
+  await readerReady(A);
+  const box = await A.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  await A.click('button[aria-label="#e03131"]');
+  await drawStroke(A, { x: box.x + 200, y: box.y + 420 }, { x: box.x + 600, y: box.y + 430 });
+  await A.click('button[aria-label="Select text to highlight"]');
+  await waitUntil(() => spanRect(A, 'Call me Ishmael'), { label: 'text layer' });
+  await A.evaluate(() => getSelection().selectAllChildren([...document.querySelectorAll('.quarc-text-layer span')].find((s) => s.textContent.trim().startsWith('Call me Ishmael'))));
+  await A.waitForSelector('button[aria-label="Highlight"]');
+  await A.click('button[aria-label="Highlight"]');
+  await waitUntil(async () => {
+    const p = await serverPull(A);
+    const a = p.anns.find((x) => x.page_key === 'p0');
+    return p.docs[0]?.file_ready && a?.ink.elements.length === 1 && a.marks.length === 1;
+  }, { timeout: 30000, label: 'the document, file, ink and highlight to reach the server' });
+
+  // ----- make two links -----
+  const makeLink = async (includeAnnotations) => {
+    await menuClick(A, 'More', 'Share…');
+    await A.waitForSelector(MODAL);
+    const box2 = await A.$(`${MODAL} input[type=checkbox]`);
+    const checked = await box2.evaluate((el) => el.checked);
+    if (checked !== includeAnnotations) await box2.click();
+    const before = await A.$$eval(`${MODAL} p.font-mono`, (els) => els.map((e) => e.textContent));
+    await A.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => /Create link/.test(b.innerText))?.click());
+    const links = await waitUntil(async () => {
+      const now = await A.$$eval(`${MODAL} p.font-mono`, (els) => els.map((e) => e.textContent));
+      return now.length > before.length ? now : null;
+    }, { label: 'the new link to be listed' });
+    const url = links.find((l) => !before.includes(l));
+    await shot(A, includeAnnotations ? '40-share-dialog' : '41-share-dialog-2');
+    await A.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.getAttribute('title') === 'Close' || b.querySelector('svg.lucide-x'))?.click());
+    await A.waitForFunction((sel) => !document.querySelector(sel), {}, MODAL);
+    return url;
+  };
+  const withInk = await makeLink(true);
+  const plain = await makeLink(false);
+  check('a share link points at this server and carries a long random token', withInk.startsWith(`${BASE}/s/`) && /^[A-Za-z0-9_-]{30,}$/.test(withInk.slice(`${BASE}/s/`.length)), withInk);
+  check('two different links were made', withInk !== plain);
+
+  // ----- an anonymous reader (no cookies at all) -----
+  const ctxAnon = await browser.createBrowserContext();
+  const anon = await ctxAnon.newPage();
+  await lightMode(anon);
+  const anonErrors = [];
+  anon.on('pageerror', (e) => anonErrors.push(e.message));
+  await anon.goto(withInk, { waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(anon))?.dark > 500, { timeout: 30000, label: 'the shared PDF to render' });
+  await sleep(800);
+  const header = await anon.$eval('header', (el) => el.innerText);
+  check('opening the link needs no account and shows who/what', /Moby Dick/.test(header) && /Shared with you/.test(header) && /with annotations/.test(header) && /Sign in to add/.test(header), header.replace(/\n/g, ' | '));
+  check('the owner\'s pencil ink is visible', (await inkPixels(anon, RED)) > 200);
+  check('and so are the highlights', (await marksPixels(anon, YELLOW)) > 1500);
+  await shot(anon, '42-shared-view');
+
+  const darkBefore = await inkPixels(anon, 'a > 200 && r < 90 && g < 90 && b < 90');
+  const redBefore = await inkPixels(anon, RED);
+  await drawStroke(anon, { x: 300, y: 700 }, { x: 700, y: 720 });
+  await sleep(1200);
+  check('it is read-only: dragging pans instead of drawing', (await inkPixels(anon, RED)) === redBefore && (await inkPixels(anon, 'a > 200 && r < 90 && g < 90 && b < 90')) === darkBefore);
+  const anonDb = await dumpDb(anon).catch(() => ({}));
+  check('and nothing is written on the reader\'s device', !(anonDb.ann || []).length && !(anonDb.docs || []).length);
+
+  await anon.goto(plain, { waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(anon))?.dark > 500, { timeout: 30000, label: 'the plain shared PDF to render' });
+  await sleep(600);
+  check('a plain link shows the PDF without the owner\'s annotations', (await inkPixels(anon, RED)) === 0 && (await marksPixels(anon, YELLOW)) === 0);
+  check('...and says so', !/with annotations/.test(await anon.$eval('header', (el) => el.innerText)));
+
+  // ----- another Quarc user adds it to their own library -----
+  const ctxE = await browser.createBrowserContext();
+  const E = await ctxE.newPage();
+  await lightMode(E);
+  E.on('pageerror', (err) => errors.push(`E: ${err.message}`));
+  const elog = [];
+  E.on('console', (m) => elog.push(`[${m.type()}] ${m.text().slice(0, 200)}`));
+  E.on('requestfailed', (r) => elog.push(`[requestfailed] ${r.url().slice(-60)} ${r.failure()?.errorText}`));
+  E.on('response', (r) => r.status() >= 400 && elog.push(`[${r.status()}] ${r.url().slice(-60)}`));
+  const idbNames = (p) => Promise.race([p.evaluate(async () => JSON.stringify((await indexedDB.databases()).map((d) => `${d.name}@${d.version}`))), sleep(4000).then(() => 'databases() NO ANSWER')]);
+  await login(E, 'erin');
+  elog.push(`after login: ${await idbNames(E)}`);
+  await E.goto(withInk, { waitUntil: 'networkidle0' });
+  elog.push(`after share page load: ${await idbNames(E)}`);
+  await waitUntil(async () => (await paperStats(E))?.dark > 500, { timeout: 30000, label: 'the shared PDF for a signed-in user' });
+  const hdr = await E.$eval('header', (el) => el.innerText);
+  check('a signed-in user is offered "Add to my library"', /Add to my library/.test(hdr), hdr);
+  await E.evaluate(() => [...document.querySelectorAll('header button')].find((b) => /Add to my library/.test(b.innerText))?.click());
+  await E.waitForFunction(() => location.pathname === '/', { timeout: 15000 });
+  const erinDocs = await waitUntil(async () => {
+    const d = (await dumpDb(E)).docs || [];
+    return d.length === 1 ? d : null;
+  }, { timeout: 30000, label: "the document to appear in erin's library" }).catch(async (err) => {
+    // diagnostics for a rare hang: is the page alive, and what does IndexedDB say?
+    const alive = await Promise.race([E.evaluate(() => `alive: ${location.pathname}`), sleep(5000).then(() => 'PAGE DID NOT ANSWER')]);
+    const dbs = await Promise.race([E.evaluate(async () => JSON.stringify(await indexedDB.databases())), sleep(5000).then(() => 'indexedDB.databases() DID NOT ANSWER')]);
+    const open = await Promise.race([
+      E.evaluate(() => new Promise((res) => { const r = indexedDB.open('quarc-reader'); r.onsuccess = () => { const n = [...r.result.objectStoreNames].join(); r.result.close(); res(`open ok, stores: [${n}] v${r.result.version}`); }; r.onerror = () => res(`open error: ${r.error}`); r.onblocked = () => res('open BLOCKED'); })),
+      sleep(5000).then(() => 'indexedDB.open DID NOT ANSWER'),
+    ]);
+    // a second, brand-new page in the same context: is the whole context wedged, or only this page?
+    const E2 = await ctxE.newPage();
+    await E2.goto(`${BASE}/logo.png`);
+    const second = await Promise.race([
+      E2.evaluate(() => new Promise((res) => { const r = indexedDB.open('probe2'); r.onsuccess = () => { r.result.close(); res('ok'); }; r.onerror = () => res('error'); })),
+      sleep(5000).then(() => 'NO ANSWER'),
+    ]);
+    console.log('  DIAG:', alive, '|', dbs, '|', open, '| a second page in the same context:', second);
+    console.log('  E console/requests:\n    ' + elog.slice(-25).join('\n    '));
+    throw err;
+  });
+  check("it lands in the other user's library as their own synced copy", erinDocs[0].title === 'Moby Dick (test)' && erinDocs[0].sync === 'cloud');
+  await waitUntil(async () => ((await dumpDb(E)).ann || []).length === 1, { timeout: 30000, label: 'the annotations to be copied' });
+  check("with the owner's annotations, since the link included them", true);
+  const erinPull = await serverPull(E);
+  check('the file was copied into her own storage (not shared with the owner\'s)', erinPull.docs[0].file_ready === true && erinPull.docs[0].id !== (await serverPull(A)).docs[0].id);
+
+  // ----- turning a link off -----
+  await menuClick(A, 'More', 'Share…');
+  await A.waitForSelector(MODAL);
+  await A.evaluate((url) => {
+    const row = [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] p.font-mono')].find((p) => p.textContent === url)?.closest('div.flex');
+    row?.querySelector('button[title="Turn this link off"]')?.click();
+  }, withInk);
+  await waitUntil(async () => !(await A.$$eval(`${MODAL} p.font-mono`, (els) => els.map((e) => e.textContent))).includes(withInk), { label: 'the link to disappear from the list' });
+  await anon.goto(withInk, { waitUntil: 'networkidle0' });
+  await sleep(800);
+  const gone = await anon.evaluate(() => document.body.innerText);
+  check('a link that was turned off stops working', /not found, has expired or was turned off/.test(gone), gone.slice(0, 200));
+  await anon.goto(plain, { waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(anon))?.dark > 500, { timeout: 30000, label: 'the other link to still work' });
+  check('while the other link keeps working', true);
+
+  check('no page errors', errors.length + anonErrors.length === 0, [...errors, ...anonErrors].join('\n'));
+  await ctxA.close();
+  await ctxAnon.close();
+  await ctxE.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+const indicator = (page) =>
+  page.evaluate(() => {
+    const pill = [...document.querySelectorAll('.quarc-canvas-page span')].find((s) => /\d+\s*\/\s*\d+/.test(s.textContent) && s.className.includes('tabular-nums'));
+    return pill?.textContent.replace(/\s+/g, '') || null;
+  });
+const waitIndicator = (page, expected, label) =>
+  waitUntil(async () => (await indicator(page)) === expected, { label: label || `the page indicator to read ${expected}` }).catch(async (err) => {
+    await shot(page, 'FAILED-indicator');
+    throw new Error(`${err.message} (it reads ${await indicator(page)})`);
+  });
+
+async function swipe(page, from, to, steps = 8) {
+  await page.touchscreen.touchStart(from.x, from.y);
+  for (let i = 1; i <= steps; i++) {
+    await page.touchscreen.touchMove(from.x + ((to.x - from.x) * i) / steps, from.y + ((to.y - from.y) * i) / steps);
+    await sleep(15);
+  }
+  await page.touchscreen.touchEnd();
+}
+
+async function scenarioReading(browser, state) {
+  section('Scroll mode, book mode, and picking up where you left off');
+  const book = writePdf('book-40.pdf', await makeTestPdf({ pages: 40, title: 'Forty Pages' }));
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  // A finger scrolls (instead of drawing) so touch gestures can be tested as reading gestures.
+  await page.evaluateOnNewDocument(() => {
+    if (!localStorage.getItem('quarc_reader_settings')) localStorage.setItem('quarc_reader_settings', JSON.stringify({ fingerMode: 'scroll' }));
+  });
+  await login(page, 'gina');
+  await chooseOnImport(page, book, 'device only');
+  await readerReady(page);
+  check('a 40-page book opens', (await indicator(page)) === '1/40', await indicator(page));
+
+  // ----- scroll mode -----
+  // Pressing a key the moment the book has appeared must work (the opening view is re-asserted for
+  // a short while to survive Excalidraw's async restore, and no navigation may be overridden by it).
+  await page.keyboard.press('End');
+  await waitIndicator(page, '40/40');
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: 'the last page to be drawn after jumping to it' });
+  check('End jumps to the last page and it is drawn', true);
+  await shot(page, '50-last-page');
+  await page.keyboard.press('Home');
+  await waitIndicator(page, '1/40');
+  // a page is ~1760 px tall at this zoom: four screens later we are on the next page
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press('PageDown');
+    await sleep(350);
+  }
+  const afterScroll = await indicator(page);
+  check('Page Down scrolls through the book a screen at a time', afterScroll === '2/40', afterScroll);
+  // continuous scroll: the wheel moves smoothly across page boundaries
+  await page.mouse.move(640, 500);
+  for (let i = 0; i < 12; i++) await page.mouse.wheel({ deltaY: 400 });
+  await sleep(600);
+  const wheeled = parseInt(((await indicator(page)) || '0').split('/')[0], 10);
+  check('the mouse wheel scrolls continuously through the pages', wheeled >= 3, `${wheeled}`);
+  const paperNow = await waitUntil(async () => {
+    const s = await paperStats(page);
+    return s && s.dark > 100 && s.white > 100000 ? s : null;
+  }, { label: 'scrolled-to pages to be drawn (page paper AND PDF text)' });
+  check('pages scrolled into view are drawn with their PDF content', !!paperNow, JSON.stringify(paperNow));
+
+  // ----- switch to book mode -----
+  await page.evaluate(() => [...document.querySelectorAll('header button')].find((b) => b.getAttribute('aria-label') === 'View')?.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Book'), { timeout: 5000 });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Book')?.click());
+  await sleep(800);
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Both')?.click()); // page turning: swipe + edge taps
+  await page.keyboard.press('Escape');
+  await sleep(500);
+  await page.evaluate(() => document.body.click());
+  const start = (await indicator(page)).split('/')[0];
+  await shot(page, '51-book-mode');
+  const zoomText = await page.evaluate(() => [...document.querySelectorAll('.zoom-button')].map((b) => b.textContent).join('') || document.querySelector('.layer-ui__wrapper__footer-left')?.innerText);
+  check('book mode shows one whole page, fitted to the screen', /\d+%/.test(zoomText) && parseInt(zoomText.match(/(\d+)%/)[1], 10) < 120, zoomText);
+
+  await page.keyboard.press('ArrowRight');
+  await waitIndicator(page, `${Number(start) + 1}/40`);
+  check('the arrow keys turn pages', true);
+  await page.keyboard.press('ArrowLeft');
+  await waitIndicator(page, `${start}/40`);
+
+  // swipe left = next page, swipe right = previous page (a finger)
+  await swipe(page, { x: 900, y: 500 }, { x: 300, y: 505 });
+  await waitIndicator(page, `${Number(start) + 1}/40`, 'a left swipe to turn to the next page');
+  check('swiping left with a finger turns to the next page', true);
+  await swipe(page, { x: 300, y: 500 }, { x: 900, y: 495 });
+  await waitIndicator(page, `${start}/40`, 'a right swipe to turn back');
+  check('swiping right turns back', true);
+
+  // the outer edge turns the page too
+  await page.touchscreen.tap(1240, 500);
+  await waitIndicator(page, `${Number(start) + 1}/40`, 'an edge tap to turn the page');
+  check('tapping the right edge turns the page', true);
+  await page.touchscreen.tap(30, 500);
+  await waitIndicator(page, `${start}/40`, 'a left-edge tap to turn back');
+  check('tapping the left edge turns back', true);
+
+  // a vertical drag inside a fitted page does not draw or scroll the page away
+  const redBefore = await inkPixels(page, 'a > 200 && r < 90 && g < 90 && b < 90');
+  await swipe(page, { x: 640, y: 300 }, { x: 645, y: 360 }, 4);
+  await sleep(500);
+  check('a short drag does not draw (the finger is for reading here)', (await inkPixels(page, 'a > 200 && r < 90 && g < 90 && b < 90')) === redBefore);
+
+  // ----- remember where I was -----
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press('ArrowRight');
+    await sleep(200);
+  }
+  const target = `${Number(start) + 6}/40`;
+  await waitIndicator(page, target);
+  await sleep(4500); // the reading position is saved a moment after you stop
+  const prog = (await dumpDb(page)).docs[0];
+  check('the reading position is saved with the document', prog.progress?.page === Number(start) + 5, JSON.stringify(prog.progress));
+  check('and the chosen reading mode', prog.settings?.mode === 'book', JSON.stringify(prog.settings));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: 'the book to reopen' });
+  await waitIndicator(page, target, 'the book to reopen on the same page');
+  check('reopening resumes on the same page in book mode', true);
+  await shot(page, '52-resumed');
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+// A stylus: pointer events with pointerType 'pen' and a pressure per sample.
+async function penStroke(cdp, pts, { buttons = 1, button = 'left' } = {}) {
+  const ev = (type, p) => cdp.send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button, buttons: type === 'mouseReleased' ? 0 : buttons, clickCount: 1, force: p.f ?? 0.5, pointerType: 'pen' });
+  await ev('mousePressed', pts[0]);
+  for (const p of pts.slice(1)) {
+    await ev('mouseMoved', p);
+    await sleep(10);
+  }
+  await ev('mouseReleased', pts[pts.length - 1]);
+}
+
+async function scenarioPen(browser, state) {
+  section('The stylus');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await login(page, 'ines');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  const cdp = await page.createCDPSession();
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+
+  const toolbarText = () => page.$eval('.quarc-canvas-page', (el) => el.parentElement.innerText);
+  check('before any stylus is seen a finger draws (a phone has no pen)', /Finger draws/.test(await toolbarText()));
+
+  await page.click('button[aria-label="#e03131"]');
+  const red0 = await inkPixels(page, RED);
+  // pressure ramps up then down across the stroke
+  const pts = Array.from({ length: 24 }, (_, i) => ({ x: box.x + 200 + i * 18, y: box.y + 420 + Math.sin(i / 3) * 6, f: 0.15 + 0.8 * Math.sin((i / 23) * Math.PI) }));
+  await penStroke(cdp, pts);
+  await sleep(1500);
+  check('a stylus stroke is drawn', (await inkPixels(page, RED)) > red0 + 200);
+  const ink = JSON.parse((await dumpDb(page)).ann[0].ink_json).elements[0];
+  const pressures = ink?.pressures || [];
+  check('with its real pressure, not a flat width', ink?.simulatePressure === false && pressures.length > 10 && Math.max(...pressures) - Math.min(...pressures) > 0.3, JSON.stringify({ sim: ink?.simulatePressure, min: Math.min(...pressures), max: Math.max(...pressures) }));
+  check('the first stylus contact makes the finger scroll instead (so a resting hand does not draw)', /Finger scrolls/.test(await toolbarText()));
+  await shot(page, '60-pressure-stroke');
+
+  // the eraser (stylus button / eraser end) removes strokes it passes over
+  const redWithInk = await inkPixels(page, RED);
+  await penStroke(cdp, [{ x: box.x + 150, y: box.y + 421 }, ...Array.from({ length: 30 }, (_, i) => ({ x: box.x + 150 + i * 18, y: box.y + 421 }))], { buttons: 2, button: 'right' });
+  await sleep(1500);
+  check('the stylus eraser button erases ink', (await inkPixels(page, RED)) < redWithInk - 150, `${redWithInk} -> ${await inkPixels(page, RED)}`);
+  const after = JSON.parse((await dumpDb(page)).ann[0].ink_json).elements;
+  check('the erasure is stored as a deletion (so other devices erase it too)', after.length === 1 && after[0].isDeleted === true, JSON.stringify(after.map((e) => e.isDeleted)));
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+async function scenarioTools(browser, state) {
+  section('The other tools: shapes, text, hold-to-snap, cut selection — and saving them');
+  const { mkdtempSync, readFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { PDFDocument } = await import('pdf-lib');
+  const downloads = mkdtempSync(join(tmpdir(), 'quarc-reader-dl-'));
+  const ctx = await browser.createBrowserContext();
+  const bsession = await browser.target().createCDPSession();
+  await bsession.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, browserContextId: ctx.id });
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await login(page, 'kai');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  const elements = async () => ((await dumpDb(page)).ann || []).flatMap((r) => JSON.parse(r.ink_json).elements).filter((e) => !e.isDeleted);
+  const tool = (name) => page.click(`[data-testid="toolbar-${name}"]`);
+
+  // ----- hold the pen still at the end of a stroke: it becomes a clean line -----
+  await page.click('button[aria-label="#1971c2"]');
+  await page.mouse.move(box.x + 200, box.y + 700);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(box.x + 200 + i * 40, box.y + 700 + (i % 2) * 3);
+    await sleep(10);
+  }
+  await sleep(900); // hold still
+  await page.mouse.up();
+  await sleep(1500);
+  let els = await elements();
+  check('holding the pen still at the end of a stroke snaps it to a clean line', els.some((e) => e.type === 'line'), els.map((e) => e.type).join());
+  await shot(page, '90-snapped-line');
+
+  // ----- Excalidraw's own tools: a rectangle -----
+  await tool('rectangle');
+  await page.mouse.move(box.x + 250, box.y + 520);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 450, box.y + 600, { steps: 8 });
+  await page.mouse.up();
+  await sleep(1500);
+  els = await elements();
+  check('the rectangle tool draws a rectangle on the page', els.some((e) => e.type === 'rectangle'), els.map((e) => e.type).join());
+
+  // ----- the text tool -----
+  await tool('text');
+  await page.mouse.click(box.x + 500, box.y + 540);
+  await sleep(400);
+  await page.keyboard.type('Merhaba dünya');
+  await page.keyboard.press('Escape');
+  await sleep(1500);
+  els = await elements();
+  const text = els.find((e) => e.type === 'text');
+  check('the text tool puts typed text on the page', !!text && /Merhaba/.test(text.text), JSON.stringify(text && text.text));
+  const pageKeys = ((await dumpDb(page)).ann || []).map((r) => r.page_key);
+  check('all of it is stored on page 1', pageKeys.join() === 'p0', pageKeys.join());
+  await shot(page, '91-tools');
+
+  // ----- cut selection: select across a stroke and it is cut at the boundary -----
+  await tool('freedraw');
+  await page.click('button[aria-label="#e03131"]');
+  await drawStroke(page, { x: box.x + 200, y: box.y + 640 }, { x: box.x + 700, y: box.y + 644 }, 20);
+  await sleep(1500);
+  const before = (await elements()).filter((e) => e.type === 'freedraw').length;
+  await page.click('.quarc-selection-tool label');
+  await page.mouse.move(box.x + 380, box.y + 610);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 520, box.y + 680, { steps: 8 });
+  await page.mouse.up();
+  await sleep(1800);
+  const all = ((await dumpDb(page)).ann || []).flatMap((r) => JSON.parse(r.ink_json).elements);
+  const live = all.filter((e) => !e.isDeleted && e.type === 'freedraw');
+  check('the cut selection cuts a stroke at the selection boundary into pieces', live.length >= before + 2, `${before} strokes -> ${live.length}`);
+  check('and the uncut original is replaced (a stored deletion, so other devices let go of it)', all.some((e) => e.isDeleted && e.type === 'freedraw'));
+  await shot(page, '92-cut-selection');
+
+  // ----- save a copy: shapes as vectors, the text drawn by Excalidraw -----
+  await page.keyboard.press('Escape');
+  await menuClick(page, 'More', 'Save PDF');
+  await page.waitForSelector(MODAL);
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => /Save a copy/.test(b.innerText))?.click());
+  const file = await waitForDownload(downloads);
+  const out = await PDFDocument.load(readFileSync(file));
+  check('the saved PDF has the same 3 pages', out.getPageCount() === 3);
+  const { PDFRawStream, decodePDFRawStream, PDFArray } = await import('pdf-lib');
+  const content = (() => {
+    const c = out.getPage(0).node.Contents();
+    const parts = [];
+    const collect = (o) => {
+      if (o instanceof PDFRawStream) parts.push(Buffer.from(decodePDFRawStream(o).decode()).toString('latin1'));
+      else if (o instanceof PDFArray) for (let i = 0; i < o.size(); i++) collect(out.context.lookup(o.get(i)));
+    };
+    collect(c);
+    return parts.join('\n');
+  })();
+  check('the pen strokes and shapes are vector paths', (content.match(/\nf\n|\nS\n|\nB\n/g) || []).length >= 4, `${(content.match(/\nS\n/g) || []).length} S, ${(content.match(/\nf\n/g) || []).length} f`);
+  check('the typed text came out (Excalidraw drew it) as an image on the page', /\/Image\d* Do|\bDo\n/.test(content) || (out.getPage(0).node.Resources()?.lookup?.(await import('pdf-lib').then((m) => m.PDFName.of('XObject'))) ?? null) !== null);
+  await shot(page, '93-after-export');
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+async function cardMenu(page, title, itemRe) {
+  const ok = await page.evaluate((t) => {
+    const card = [...document.querySelectorAll('div.group, div.cursor-pointer')].find((c) => c.innerText.includes(t) && c.querySelector('button[aria-label="More"]'));
+    card?.querySelector('button[aria-label="More"]')?.click();
+    return !!card;
+  }, title);
+  if (!ok) throw new Error(`no card titled ${title}`);
+  await page.waitForFunction((src) => [...document.querySelectorAll('button')].some((b) => new RegExp(src).test(b.innerText)), { timeout: 5000 }, itemRe);
+  await page.evaluate((src) => [...document.querySelectorAll('button')].find((b) => new RegExp(src).test(b.innerText))?.click(), itemRe);
+}
+
+const cardTitles = (page) => page.$$eval('main p.line-clamp-2', (els) => els.map((e) => e.textContent.trim()).sort());
+const clickTab = (page, label) => page.evaluate((l) => [...document.querySelectorAll('nav button')].find((b) => b.innerText.startsWith(l))?.click(), label);
+
+async function scenarioLibrary(browser, state) {
+  section('The library');
+  const { PDFDocument } = await import('pdf-lib');
+  const second = writePdf('second.pdf', await makeTestPdf({ pages: 2, title: 'Second Book', author: 'B' }));
+  const third = writePdf('third.pdf', await makeTestPdf({ pages: 2, title: 'Third Book', author: 'C' }));
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await login(page, 'hana');
+
+  // ----- adding: the same file twice is one document -----
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  // draw something on it while it is still local-only
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  await page.click('button[aria-label="#e03131"]');
+  await drawStroke(page, { x: box.x + 200, y: box.y + 420 }, { x: box.x + 600, y: box.y + 430 });
+  await sleep(1500);
+  await page.click('button[aria-label="Back to library"]');
+  await page.waitForFunction(() => location.pathname === '/');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await waitUntil(async () => /already in your library/.test(await page.evaluate(() => document.body.innerText)), { label: 'the duplicate notice' });
+  check('adding the same PDF again does not make a second copy', ((await dumpDb(page)).docs || []).length === 1);
+  // ...it opens the one you already have
+  await page.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 15000 });
+  check('and takes you to the existing document', true);
+  await page.click('button[aria-label="Back to library"]');
+  await page.waitForFunction(() => location.pathname === '/');
+
+  // ----- "remember my choice" -----
+  await chooseOnImport(page, second, 'Sync with my server');
+  // ("remember" was not ticked, so the next one still asks)
+  await readerReady(page);
+  await page.click('button[aria-label="Back to library"]');
+  await page.waitForFunction(() => location.pathname === '/');
+  const [chooser] = await Promise.all([page.waitForFileChooser(), page.evaluate(() => document.querySelector('header button.bg-accent')?.click())]);
+  await chooser.accept([third]);
+  await page.waitForSelector(MODAL);
+  check('without "remember", every new PDF asks again', true);
+  await page.evaluate(() => (document.querySelector('div[class*="z-[1100]"] [role=dialog] input[type=checkbox]')).click());
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => /device only/.test(b.innerText))?.click());
+  await readerReady(page);
+  check('the choice can be remembered as the default', (await page.evaluate(() => JSON.parse(localStorage.getItem('quarc_reader_settings')).syncChoice)) === 'local');
+  await page.click('button[aria-label="Back to library"]');
+  await page.waitForFunction(() => location.pathname === '/');
+  await sleep(500);
+  check('three documents in the library', (await cardTitles(page)).join('|') === 'Moby Dick (test)|Second Book|Third Book', (await cardTitles(page)).join('|'));
+  const dbA = (await dumpDb(page)).docs;
+  check('each kept the choice made for it (one synced, two local)', dbA.filter((d) => d.sync === 'cloud').length === 1 && dbA.filter((d) => d.sync === 'local').length === 2, JSON.stringify(dbA.map((d) => [d.title, d.sync])));
+  await shot(page, '70-library');
+
+  // ----- search, favorites, rename -----
+  await page.type('input[placeholder="Search your library"]', 'second');
+  await sleep(300);
+  check('search filters the library as you type', (await cardTitles(page)).join('|') === 'Second Book');
+  await page.evaluate(() => { const i = document.querySelector('input[placeholder="Search your library"]'); i.select(); });
+  await page.keyboard.press('Backspace');
+  await cardMenu(page, 'Third Book', 'Add to favorites');
+  await sleep(300);
+  await clickTab(page, 'Favorites');
+  await sleep(300);
+  await shot(page, '72-favorites');
+  check('favorites are listed under Favorites', (await cardTitles(page)).join('|') === 'Third Book', `${(await cardTitles(page)).join('|')} | search box: "${await page.$eval('input[placeholder="Search your library"]', (e) => e.value)}" | favs in db: ${JSON.stringify((await dumpDb(page)).docs.map((d) => [d.title, d.is_favorite]))}`);
+  await clickTab(page, 'This device only');
+  await sleep(300);
+  check('"This device only" lists exactly the documents that are not synced', (await cardTitles(page)).join('|') === 'Moby Dick (test)|Third Book', (await cardTitles(page)).join('|'));
+  await clickTab(page, 'All');
+
+  await cardMenu(page, 'Second Book', 'Rename');
+  await page.waitForSelector(MODAL);
+  await page.$eval(`${MODAL} input`, (el) => { el.select(); });
+  await page.keyboard.type('Second Book (renamed)');
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.innerText.trim() === 'Save')?.click());
+  await sleep(500);
+  check('a document can be renamed', (await cardTitles(page)).includes('Second Book (renamed)'));
+  const renamedOnServer = await waitUntil(async () => (await serverPull(page)).docs.find((d) => d.title === 'Second Book (renamed)'), { timeout: 30000, label: 'the rename to reach the server' });
+  check('and the rename of a synced document reaches the server', !!renamedOnServer);
+
+  // ----- trash -----
+  await cardMenu(page, 'Third Book', 'Move to trash');
+  await sleep(300);
+  check('a document moved to the trash leaves the library', !(await cardTitles(page)).includes('Third Book'));
+  await clickTab(page, 'Trash');
+  await sleep(300);
+  check('and is listed in the trash', (await cardTitles(page)).join('|') === 'Third Book');
+  await cardMenu(page, 'Third Book', 'Restore');
+  await sleep(300);
+  await clickTab(page, 'All');
+  await sleep(300);
+  check('restoring brings it back', (await cardTitles(page)).includes('Third Book'));
+  const blobsBefore = ((await dumpDb(page)).blobs || []).length;
+  await cardMenu(page, 'Third Book', 'Move to trash');
+  await sleep(300);
+  await clickTab(page, 'Trash');
+  await sleep(300);
+  await cardMenu(page, 'Third Book', 'Delete forever');
+  await page.waitForSelector(MODAL);
+  const warning = await page.$eval(MODAL, (el) => el.innerText);
+  check('deleting forever warns that a local-only document cannot be recovered', /not synced anywhere/.test(warning), warning.replace(/\n/g, ' '));
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.innerText.trim() === 'Delete')?.click());
+  await sleep(800);
+  const dbEnd = await dumpDb(page);
+  check("it is gone from the device, file included", dbEnd.docs.length === 2 && dbEnd.blobs.length === blobsBefore - 1, `${dbEnd.docs.length} docs, ${dbEnd.blobs.length}/${blobsBefore} blobs`);
+  await clickTab(page, 'All');
+
+  // ----- turn on sync for a document that already has ink -----
+  const before = await serverPull(page);
+  check('the first document is still only on this device', !before.docs.some((d) => d.title === 'Moby Dick (test)'));
+  await cardMenu(page, 'Moby Dick', 'Sync with my server');
+  await page.waitForSelector(MODAL);
+  await shot(page, '71-turn-on-sync');
+  const text = await page.$eval(MODAL, (el) => el.innerText);
+  check('the dialog says what turning sync on does', /uploaded to your Quarc server/i.test(text), text.replace(/\n/g, ' '));
+  await page.evaluate(() => [...document.querySelectorAll('div[class*="z-[1100]"] [role=dialog] button')].find((b) => b.innerText.trim() === 'Start syncing')?.click());
+  const synced = await waitUntil(async () => {
+    const p = await serverPull(page);
+    const d = p.docs.find((x) => x.title === 'Moby Dick (test)');
+    return d?.file_ready && p.anns.some((a) => a.doc_id === d.id && a.ink.elements.length) ? p : null;
+  }, { timeout: 40000, label: 'the existing document, file and ink to reach the server' });
+  check('turning sync on later uploads the file and the ink that was already written', !!synced);
+  check('and the library marks it as synced', ((await dumpDb(page)).docs.find((d) => d.title === 'Moby Dick (test)') || {}).sync === 'cloud');
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// --------------------------------------------------------------------------------------------------
+
+async function scenarioBig(browser) {
+  section('A 300-page book');
+  const big = writePdf('book-300.pdf', await makeTestPdf({ pages: 300, title: 'Three Hundred Pages' }));
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await login(page, 'jo');
+  const t0 = Date.now();
+  await chooseOnImport(page, big, 'device only');
+  await readerReady(page);
+  const opened = Date.now() - t0;
+  check('importing and opening 300 pages takes a few seconds, not minutes', opened < 25000, `${opened} ms`);
+  const doc = (await dumpDb(page)).docs[0];
+  check('all 300 page sizes were measured', doc.page_count === 300 && JSON.stringify(doc.sizes) === '[[300,595,842]]', JSON.stringify(doc.sizes));
+
+  // jump around: far jumps must render the destination page, and the pool must not grow without bound
+  const heapMB = async () => Math.round((await page.metrics()).JSHeapUsedSize / 1048576);
+  const heap0 = await heapMB();
+  let jumpMs = 0;
+  for (const key of ['End', 'Home', 'End', 'Home', 'End']) {
+    const s = Date.now();
+    await page.keyboard.press(key);
+    await waitIndicator(page, key === 'End' ? '300/300' : '1/300');
+    await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: `page to draw after ${key}` });
+    jumpMs = Math.max(jumpMs, Date.now() - s);
+  }
+  check('jumping to the last/first page renders it quickly', jumpMs < 4000, `slowest ${jumpMs} ms`);
+  // scroll through ~40 pages with the wheel
+  await page.mouse.move(640, 500);
+  await page.keyboard.press('Home');
+  await sleep(500);
+  for (let i = 0; i < 150; i++) {
+    await page.mouse.wheel({ deltaY: 500 });
+    if (i % 10 === 0) await sleep(30);
+  }
+  await sleep(1200);
+  const at = parseInt(((await indicator(page)) || '0').split('/')[0], 10);
+  check('wheel-scrolling a long way goes through the book', at > 20, `page ${at}`);
+  await waitUntil(async () => (await paperStats(page))?.dark > 100, { label: 'pages to draw after a long scroll' });
+  const heap1 = await heapMB();
+  check('memory stays bounded (JS heap)', heap1 < heap0 + 250 && heap1 < 700, `${heap0} MB -> ${heap1} MB`);
+  await shot(page, '80-big-book');
+
+  // ink on a late page is stored under that page only
+  await page.keyboard.press('End');
+  await waitIndicator(page, '300/300');
+  await sleep(800);
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  await drawStroke(page, { x: box.x + 300, y: box.y + 300 }, { x: box.x + 600, y: box.y + 320 });
+  await sleep(1500);
+  const rows = (await dumpDb(page)).ann || [];
+  check('ink on the last page is stored under p299', rows.length === 1 && rows[0].page_key === 'p299', rows.map((r) => r.page_key).join());
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+main().catch((err) => {
+  console.error(err);
+  stopStack();
+  process.exit(2);
+});

@@ -1,0 +1,62 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  unit:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Backend (API, sync, merging, uploads, share links)
+        working-directory: backend
+        run: |
+          npm install
+          npm test
+
+      - name: Frontend (geometry, ink, highlights, PDF export, translations, shape recognition)
+        working-directory: frontend
+        run: |
+          npm install
+          npm test
+
+  browser:
+    # The real backend + the production build + headless Chrome. See tests/README.md.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build the app
+        working-directory: frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Install backend and test dependencies
+        run: |
+          (cd backend && npm install)
+          (cd tests && npm install)
+
+      - name: Browser tests
+        working-directory: tests
+        env:
+          E2E_OUT: ${{ runner.temp }}/e2e
+          CHROME_PATH: /usr/bin/google-chrome
+        run: npm test
+
+      - name: Screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: ${{ runner.temp }}/e2e/*.png
+          if-no-files-found: ignore

@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "description": "Default capability for the main window. The window shows the Quarc Reader server, so it is a remote origin and has to be listed for the app's native calls (version, update link, saving a PDF) to be allowed.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["https://quarcnet0.tail84500c.ts.net:4008/*"]
+  },
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "dialog:allow-save",
+    "fs:allow-write-file"
+  ]
+}

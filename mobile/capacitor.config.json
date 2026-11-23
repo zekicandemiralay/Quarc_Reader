@@ -1,0 +1,9 @@
+{
+  "appId": "com.quarc.reader",
+  "appName": "Quarc Reader",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#121212"
+  }
+}

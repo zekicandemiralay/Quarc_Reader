@@ -1,0 +1,31 @@
+node_modules/
+dist/
+.env
+backup_*/
+backups/
+*.log
+
+# generated at build time from node_modules/pdfjs-dist (frontend/scripts/copy-pdfjs-assets.mjs)
+frontend/public/pdfjs/
+
+# local data of the dev server
+backend/data/
+
+# Android signing — never commit these
+mobile/*.keystore
+mobile/keystore-password.txt
+
+# Tauri / Capacitor build output
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+mobile/android/.gradle/
+mobile/android/build/
+mobile/android/app/build/
+mobile/android/app/release.keystore
+mobile/android/app/src/main/assets/public/
+mobile/android/capacitor-cordova-android-plugins/build/
+mobile/www/*
+!mobile/www/index.html
+
+# browser tests
+tests/node_modules/
