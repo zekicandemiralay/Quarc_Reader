@@ -33,8 +33,14 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   hero + book-cover cards (generated cloth covers when there is no thumbnail).
 - **Reading style prompt:** `Reader.jsx` keeps a per-opening `sessionMode` (keyed by route id); `mode = sessionMode ??
   (readMode === 'ask' ? null : readMode)` and `ReaderCanvas` is not mounted until there is a mode (`ReadingStyleDialog`).
-  Settings live in `localStorage` `quarc_reader_settings`; `settingsVersion` (2) resets old stored `readMode`/`paperMode`
-  once. `SharedView` never asks (local `mode` state; `'ask'` would be an invalid canvas mode).
+  Settings live in `localStorage` `quarc_reader_settings`; `settingsVersion` (3) resets old stored `readMode`/`paperMode`
+  once (version < 2) and `fingerMode`/`penSeen` once (version < 3: the finger used to draw by default). `SharedView` never asks
+  (local `mode` state; `'ask'` would be an invalid canvas mode). **A finger does not draw by default, and is closed again with every
+  document that is opened:** the dock's Finger button is plain component state in `ReaderCanvas` (`fingerOn`, remounted per document
+  by `key={doc.id}`), never stored; the setting `fingerMode` (`'scroll'` default | `'draw'`, Settings → Handwriting) only says how
+  a reading *starts*. The old `'auto'` mode and `penSeen` are gone; palm rejection (`PALM_WINDOW_MS`) is what protects a hand
+  resting next to a stylus when the finger is open. The harness stamps `settingsVersion: 3` — an older stamp would make the app
+  drop the settings a test injects.
 - **The reader is canvas-based.** Pages stack vertically in Excalidraw's scene coordinates (96 dpi px; a PDF point is
   4/3 px). Layers: paper canvas (PDF bitmaps) → marks canvas (highlights) → Excalidraw (ink) → overlay canvas (live stroke)
   → DOM text layers (selection, only when needed). `reader/geometry.js` is the pure layout/view math.
@@ -207,7 +213,7 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
 cd frontend && npm test                  # 184 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links library big   (336 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links library big   (343 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 

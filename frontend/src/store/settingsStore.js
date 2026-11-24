@@ -6,7 +6,7 @@ const KEY = 'quarc_reader_settings';
 
 // Bump when a default changes in a way that should reach people who already have settings saved
 // (every update() saves the whole object, so an old default would otherwise stay forever).
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 
 const DEFAULTS = {
   settingsVersion: SETTINGS_VERSION,
@@ -14,8 +14,7 @@ const DEFAULTS = {
   // Paper: how the page itself looks while reading.
   paperMode: 'sepia', // 'sepia' | 'white' | 'dark' | 'auto' (follow the theme: white in light mode, dark in dark mode)
   // Handwriting (same as Quarc Notes)
-  fingerMode: 'auto', // 'auto' | 'draw' | 'scroll' — auto: draw until a stylus is used here, then scroll
-  penSeen: false, // a stylus has been used on this device
+  fingerMode: 'scroll', // 'scroll' | 'draw' — how a finger works when a document opens (the dock's Finger button changes it for that reading only)
   shapeSnap: true, // hold the pen still at the end of a stroke to turn it into a clean shape
   tool: 'pen', // 'pen' | 'highlighter'
   penSize: 2.5,
@@ -43,9 +42,16 @@ function load() {
     const stored = JSON.parse(localStorage.getItem(KEY) || '{}');
     // Settings saved before version 2 hold the old defaults (white paper, scroll): drop those two
     // so the new defaults apply once. Anything the person set since is kept.
-    if ((stored.settingsVersion || 1) < SETTINGS_VERSION) {
+    const version = stored.settingsVersion || 1;
+    if (version < 2) {
       delete stored.readMode;
       delete stored.paperMode;
+    }
+    // Version 3: the finger no longer draws by default ('auto' drew until a stylus was seen, and the dock button used to
+    // remember its state). Everyone starts with it closed once; 'penSeen' is not used any more.
+    if (version < 3) {
+      delete stored.fingerMode;
+      delete stored.penSeen;
     }
     return { ...DEFAULTS, ...stored, settingsVersion: SETTINGS_VERSION };
   } catch {

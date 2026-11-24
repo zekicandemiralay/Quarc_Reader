@@ -200,7 +200,7 @@ export default function Settings() {
 
         <Section title={t('settings.handwriting')}>
           <Row label={t('settings.finger')} hint={t('settings.fingerHint')}>
-            <Segmented value={s.fingerMode} onChange={(v) => s.update({ fingerMode: v })} options={[['auto', t('settings.auto')], ['draw', t('canvas.fingerDrawsShort')], ['scroll', t('canvas.fingerScrollsShort')]]} />
+            <Segmented value={s.fingerMode} onChange={(v) => s.update({ fingerMode: v })} options={[['scroll', t('canvas.fingerScrollsShort')], ['draw', t('canvas.fingerDrawsShort')]]} />
           </Row>
           <Row label={t('canvas.shapeSnap')} hint={t('canvas.shapeSnapHint')}>
             <Toggle checked={s.shapeSnap} onChange={(v) => s.update({ shapeSnap: v })} />

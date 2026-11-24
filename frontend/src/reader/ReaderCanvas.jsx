@@ -93,8 +93,6 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 ) {
   const { t, i18n } = useTranslation();
   const isDark = useSettings((s) => s.isDark);
-  const fingerMode = useSettings((s) => s.fingerMode);
-  const penSeen = useSettings((s) => s.penSeen);
   const shapeSnap = useSettings((s) => s.shapeSnap);
   const snapText = useSettings((s) => s.snapText);
   const pageTurn = useSettings((s) => s.pageTurn);
@@ -105,7 +103,10 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const hlSize = useSettings((s) => s.hlSize);
   const updatePrefs = useSettings((s) => s.update);
   const dark = paper === 'dark';
-  const fingerDraws = !readOnly && (fingerMode === 'draw' || (fingerMode === 'auto' && !penSeen));
+  // Can a finger draw? Closed by default, with every document that is opened: the setting says how a reading starts
+  // (Settings → Handwriting → Finger), the dock's Finger button changes it for this reading only.
+  const [fingerOn, setFingerOn] = useState(() => useSettings.getState().fingerMode === 'draw');
+  const fingerDraws = !readOnly && fingerOn;
 
   // ---------- document state ----------
 
@@ -1674,7 +1675,6 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 
     if (e.pointerType === 'pen') {
       lastPenActivity.current = Date.now();
-      if (!useSettings.getState().penSeen) updatePrefs({ penSeen: true });
       // A palm that landed just before the pen: undo its scroll.
       if (touchPan.current) {
         applyView(touchPan.current.startView);
@@ -2664,7 +2664,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
             shapeSnap={shapeSnap}
             onToggleShapeSnap={() => updatePrefs({ shapeSnap: !shapeSnap })}
             fingerDraws={fingerDraws}
-            onToggleFinger={() => updatePrefs({ fingerMode: fingerDraws ? 'scroll' : 'draw' })}
+            onToggleFinger={() => setFingerOn((on) => !on)}
             onUndo={undo}
             onRedo={redo}
             inkFilter={inkFilter}

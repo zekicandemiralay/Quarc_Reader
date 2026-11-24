@@ -87,8 +87,9 @@ pages, jumps to any page (tap the counter) and zooms.
   hue, type or paste a code like `#12ab34`, or pick a colour from anywhere on the screen with the pipette (where your
   browser has one).
 
-- **Pencil / stylus:** pressure-sensitive. The first time a stylus touches the screen, fingers switch to scrolling so a
-  resting hand never draws (switch it back with the **Finger** button). Hold the pen still at the end of a stroke to snap it
+- **Pencil / stylus:** pressure-sensitive. A **finger only scrolls** — writing with a finger is closed whenever you open a
+  document. Press **Finger** on the dock to write with it for that reading (it is closed again the next time you open a
+  document); if you always want it open, choose **Settings → Handwriting → Finger → Finger draws**. Hold the pen still at the end of a stroke to snap it
   to a clean line, circle, rectangle… The eraser end (or the barrel button) erases.
 - **Highlighter:** swipe over text — with **Snap to text** on it becomes a real highlight of the whole words; over blank
   paper it stays freehand ink.

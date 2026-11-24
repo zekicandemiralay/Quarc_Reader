@@ -2021,7 +2021,7 @@ async function scenarioPen(browser, state) {
   });
 
   const toolbarText = () => page.$eval('[data-testid="finger-toggle"]', (el) => el.title);
-  check('before any stylus is seen a finger draws (a phone has no pen)', /Finger draws/.test(await toolbarText()));
+  check('a finger scrolls by default: drawing with it is closed', /Finger scrolls/.test(await toolbarText()));
 
   await page.click('button[aria-label="#e03131"]');
   const red0 = await inkPixels(page, RED);
@@ -2033,7 +2033,7 @@ async function scenarioPen(browser, state) {
   const ink = JSON.parse((await dumpDb(page)).ann[0].ink_json).elements[0];
   const pressures = ink?.pressures || [];
   check('with its real pressure, not a flat width', ink?.simulatePressure === false && pressures.length > 10 && Math.max(...pressures) - Math.min(...pressures) > 0.3, JSON.stringify({ sim: ink?.simulatePressure, min: Math.min(...pressures), max: Math.max(...pressures) }));
-  check('the first stylus contact makes the finger scroll instead (so a resting hand does not draw)', /Finger scrolls/.test(await toolbarText()));
+  check('using a stylus does not open the finger either', /Finger scrolls/.test(await toolbarText()));
   await shot(page, '60-pressure-stroke');
 
   // the eraser (stylus button / eraser end) removes strokes it passes over
@@ -2043,6 +2043,34 @@ async function scenarioPen(browser, state) {
   check('the stylus eraser button erases ink', (await inkPixels(page, RED)) < redWithInk - 150, `${redWithInk} -> ${await inkPixels(page, RED)}`);
   const after = JSON.parse((await dumpDb(page)).ann[0].ink_json).elements;
   check('the erasure is stored as a deletion (so other devices erase it too)', after.length === 1 && after[0].isDeleted === true, JSON.stringify(after.map((e) => e.isDeleted)));
+
+  // ----- the finger: closed whenever a document opens, opened for one reading with the dock button -----
+  const red1 = await inkPixels(page, RED);
+  await swipe(page, { x: box.x + 300, y: box.y + 560 }, { x: box.x + 600, y: box.y + 566 }, 10);
+  await sleep(1200);
+  check('a finger drag does not draw while it is closed', (await inkPixels(page, RED)) === red1);
+  await page.click('[data-testid="finger-toggle"]');
+  check('the Finger button opens it', /Finger draws/.test(await toolbarText()));
+  await swipe(page, { x: box.x + 300, y: box.y + 620 }, { x: box.x + 600, y: box.y + 626 }, 10);
+  await sleep(1500);
+  check('and then a finger draws', (await inkPixels(page, RED)) > red1 + 100, `${red1} -> ${await inkPixels(page, RED)}`);
+  check('the opened finger is not stored as a setting', JSON.parse(await page.evaluate(() => localStorage.getItem('quarc_reader_settings') || '{}')).fingerMode !== 'draw');
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: 'the reader after a reload' });
+  await sleep(600);
+  check('opening the document again closes it again, every time', /Finger scrolls/.test(await toolbarText()));
+  // An older version of the app saved the finger as open ('draw'): that is reset once...
+  await page.evaluate(() => localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 2, fingerMode: 'draw', readMode: 'scroll', paperMode: 'white' })));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: 'the reader after the upgrade' });
+  await sleep(600);
+  check('a finger that an older version left open is closed after the update', /Finger scrolls/.test(await toolbarText()));
+  // ...while choosing Settings -> Finger draws -> afterwards is kept.
+  await page.evaluate(() => localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 3, fingerMode: 'draw', readMode: 'scroll', paperMode: 'white' })));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await paperStats(page))?.dark > 500, { label: 'the reader with the setting' });
+  await sleep(600);
+  check('the Settings choice "Finger draws" is kept: a document then opens with it open', /Finger draws/.test(await toolbarText()));
   check('no page errors', errors.length === 0, errors.join('\n'));
   await ctx.close();
 }
