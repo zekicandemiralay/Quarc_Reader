@@ -33,6 +33,8 @@ import { drawPaper, drawMarks, DARK_FILTER, DESK } from './paper';
 import { newMark, mergeMarks, updateMark, deleteMark, hitMark, activeMarks, markChanges, restoreMarks } from './marks';
 import { History } from './history';
 import { LinkIndex, hitLink, destPageIndex } from './pdfLinks';
+import { startToolFor, isMouseDevice, finePointerNow } from '../lib/device';
+import { getPlatform } from '../lib/updateCheck';
 import { openExternal } from '../lib/openExternal';
 import { snapshotScene, diffScene, applyInkChanges } from './inkDiff';
 import Toolbar from './Toolbar';
@@ -153,7 +155,12 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 
   // ---------- UI state ----------
 
-  const [activeToolType, setActiveToolType] = useState('freedraw');
+  // What a document opens with: on a computer the HAND (a drag with the mouse moves the page; the pen is pressed to write with
+  // the mouse), on a touch screen the pen. The setting `startTool` can force either. Read once, when the document opens.
+  const [device] = useState(() => ({ platform: getPlatform(), fine: finePointerNow() }));
+  const mouseDevice = isMouseDevice(device.platform, device.fine);
+  const [startTool] = useState(() => startToolFor({ setting: useSettings.getState().startTool, platform: device.platform, finePointer: device.fine }));
+  const [activeToolType, setActiveToolType] = useState(startTool);
   const [textMode, setTextMode] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectionTool, setSelectionTool] = useState(null);
@@ -231,6 +238,10 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const isDrawTool = activeToolType === 'freedraw' && !textMode;
   const isDrawToolRef = useRef(isDrawTool);
   isDrawToolRef.current = isDrawTool;
+  // The hand is in hand: the pointer (mouse, stylus, finger) moves the page, like in a shared link, and a tap opens a link.
+  const reading = activeToolType === 'hand' && !textMode;
+  const readingRef = useRef(reading);
+  readingRef.current = reading;
   // Text layers exist only when something needs the words: selecting, snapping a highlighter, finding.
   const textNeeded = textMode || (isDrawTool && tool === 'highlighter' && snapText && !readOnly) || findOpen || snipOn;
   const eraserOn = activeToolType === 'eraser' && !textMode && !selectionTool && !snipOn;
@@ -804,20 +815,34 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     apiRef.current?.setActiveTool({ type: 'freedraw' });
   }
 
-  // The eraser button of the dock: on, and back to the pen or highlighter you had.
-  function toggleEraser() {
-    if (eraserOn) selectDrawMode(tool);
-    else chooseTool('eraser');
+  // The hand: nothing is written, a drag moves the page (the way a document opens on a computer).
+  function selectHand() {
+    chooseTool('hand');
   }
 
+  // The eraser button of the dock: on, and back to what you had — the hand, or the pen or highlighter.
+  const toolBeforeEraser = useRef('freedraw');
+  function toggleEraser() {
+    if (eraserOn) {
+      if (toolBeforeEraser.current === 'hand') selectHand();
+      else selectDrawMode(tool);
+    } else {
+      toolBeforeEraser.current = readingRef.current ? 'hand' : 'freedraw';
+      chooseTool('eraser');
+    }
+  }
+
+  // Select-text mode borrows the hand tool; leaving it gives back what was in hand (the pen, or the hand: it does not turn the pen on).
+  const toolBeforeText = useRef('freedraw');
   function toggleTextMode() {
     setTextMode((on) => {
       const next = !on;
       if (next) {
+        toolBeforeText.current = readingRef.current ? 'hand' : 'freedraw';
         apiRef.current?.setActiveTool({ type: 'hand' });
         setSelectionTool(null);
       } else {
-        apiRef.current?.setActiveTool({ type: 'freedraw' });
+        apiRef.current?.setActiveTool({ type: toolBeforeText.current });
         clearTextSelection();
       }
       return next;
@@ -1326,7 +1351,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   function linksOn() {
     const p = prefsRef.current;
     if (snipOnRef.current || selectionToolRef.current || erasing.current) return false;
-    return isDrawToolRef.current || textModeRef.current || !!p.readOnly;
+    return isDrawToolRef.current || textModeRef.current || readingRef.current || !!p.readOnly;
   }
 
   // The link under a screen point: { link, index } (index = its page in the layout), or null. Only pages whose links were read.
@@ -1691,6 +1716,12 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         startErase(e);
         return;
       }
+      if (readingRef.current) {
+        // The hand is in hand: the stylus moves the page, and a tap on a link opens it.
+        consume(e);
+        beginPan(e);
+        return;
+      }
       if (!isDrawToolRef.current) return;
       consume(e);
       startStroke(e);
@@ -1699,7 +1730,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 
     if (e.pointerType === 'mouse') {
       if (e.button !== 0) return;
-      if (p.readOnly) {
+      if (p.readOnly || readingRef.current) {
         consume(e);
         beginPan(e);
         return;
@@ -1732,11 +1763,11 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       return;
     }
 
-    if (isDrawToolRef.current || selectionToolRef.current || snipOnRef.current || p.readOnly) {
+    if (isDrawToolRef.current || selectionToolRef.current || snipOnRef.current || readingRef.current || p.readOnly) {
       consume(e);
       touchTrack.current = { pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, consumed: true };
       // A finger that draws still scrolls when it lands on the desk.
-      if (!(p.fingerDraws && !selectionToolRef.current && !snipOnRef.current && startStroke(e))) beginPan(e);
+      if (!(p.fingerDraws && !readingRef.current && !selectionToolRef.current && !snipOnRef.current && startStroke(e))) beginPan(e);
       return;
     }
 
@@ -2633,7 +2664,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
             files: initial.files,
             appState: {
               viewBackgroundColor: 'transparent',
-              activeTool: { type: 'freedraw' },
+              activeTool: { type: startTool },
               currentItemRoughness: 0,
               currentItemStrokeColor: penColor,
             },
@@ -2652,6 +2683,9 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         {showToolbar && (
           <Toolbar
             drawMode={isDrawTool ? tool : null}
+            showHand={mouseDevice}
+            handOn={reading}
+            onHand={selectHand}
             textMode={textMode}
             onDrawMode={selectDrawMode}
             onTextMode={toggleTextMode}

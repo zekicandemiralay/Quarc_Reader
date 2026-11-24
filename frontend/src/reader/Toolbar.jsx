@@ -6,6 +6,7 @@ import {
   Undo2,
   Redo2,
   Hand,
+  Fingerprint,
   Pointer,
   TextCursorInput,
   Shapes,
@@ -155,6 +156,9 @@ export default function Toolbar({
   onToggleShapeSnap,
   fingerDraws,
   onToggleFinger,
+  showHand = false, // a mouse-driven screen: a Hand button (move the page) comes before the pen
+  handOn = false,
+  onHand,
   onUndo,
   onRedo,
   inkFilter,
@@ -183,7 +187,8 @@ export default function Toolbar({
   const panel = { value: active.color, recent: isHl ? hlHistory : penHistory, onPick: common.onPick, inkFilter };
 
   // Is one of the "other" tools active (so the Tools button shows it)? The eraser has its own button.
-  const otherTool = !textMode && !drawMode && !eraserOn ? (cutMode ? `cut-${cutMode}` : activeTool) : null;
+  // (With the Hand button of its own, the hand is not "another tool".)
+  const otherTool = !textMode && !drawMode && !eraserOn && !(showHand && handOn) ? (cutMode ? `cut-${cutMode}` : activeTool) : null;
   const CurrentToolIcon = (otherTool && TOOLS.find(([type]) => type === otherTool)?.[1]) || null;
 
   // The last circle of the colour row: opens the recent colours and the picker (it shows the colour when it is not a preset).
@@ -213,6 +218,11 @@ export default function Toolbar({
       data-finger={fingerDraws ? 'draws' : 'scrolls'}
       className="absolute left-1/2 top-3 z-[5] flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 items-center gap-1 overflow-x-auto rounded-2xl border border-neutral-200/80 bg-surface/90 p-1.5 shadow-float backdrop-blur-xl [scrollbar-width:none] dark:border-neutral-700/80 dark:bg-neutral-800/90"
     >
+      {showHand && (
+        <DockButton active={handOn} onClick={onHand} title={t('canvas.hand')} testId="tool-hand">
+          <Hand size={18} />
+        </DockButton>
+      )}
       <DockButton active={drawMode === 'pen'} onClick={() => onDrawMode('pen')} title={t('canvas.pen')} testId="tool-pen">
         <PenLine size={18} />
       </DockButton>
@@ -267,7 +277,7 @@ export default function Toolbar({
       <Divider />
 
       <DockButton active={fingerDraws} onClick={onToggleFinger} title={fingerDraws ? t('canvas.fingerDraws') : t('canvas.fingerScrolls')} testId="finger-toggle">
-        {fingerDraws ? <Pointer size={18} /> : <Hand size={18} />}
+        {fingerDraws ? <Pointer size={18} /> : showHand ? <Fingerprint size={18} /> : <Hand size={18} />}
       </DockButton>
       <span ref={toolsBtn} className="shrink-0">
         <DockButton active={!!otherTool} onClick={() => setMenu(menu === 'tools' ? null : 'tools')} title={t('reader.moreTools')} testId="tools-menu" className="gap-1">

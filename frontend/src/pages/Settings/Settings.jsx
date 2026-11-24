@@ -199,6 +199,9 @@ export default function Settings() {
         </Section>
 
         <Section title={t('settings.handwriting')}>
+          <Row label={t('settings.startTool')} hint={t('settings.startToolHint')}>
+            <Segmented value={s.startTool} onChange={(v) => s.update({ startTool: v })} options={[['auto', t('settings.startAuto')], ['pen', t('settings.startPen')], ['hand', t('settings.startHand')]]} />
+          </Row>
           <Row label={t('settings.finger')} hint={t('settings.fingerHint')}>
             <Segmented value={s.fingerMode} onChange={(v) => s.update({ fingerMode: v })} options={[['scroll', t('canvas.fingerScrollsShort')], ['draw', t('canvas.fingerDrawsShort')]]} />
           </Row>

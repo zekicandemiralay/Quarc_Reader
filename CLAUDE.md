@@ -105,6 +105,18 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   the doc from Dexie and tombstone/restore by id (`setNoteDeleted`, `setBookmarkDeleted`); a restored note page gets its ink back from
   `inkRef` in the relayout effect. (4) `history.batch(fn)` makes several records one step — the stylus eraser removes strokes *and*
   highlights in one swipe. Not undoable: reading position, settings, sync mode, Replace in library. The shared (read-only) view has none.
+- **What a document opens with: the hand on a computer, the pen on a touch screen** (`lib/device.js` `startToolFor`, setting `startTool`
+  `'auto'` | `'pen'` | `'hand'`, Settings → Handwriting). Auto = the desktop app, or a browser whose primary pointer is fine
+  (`matchMedia('(pointer: fine)')`, not Android) → the Excalidraw `hand` tool; touch screens and the Android app → `freedraw` as always.
+  `ReaderCanvas` reads it once (`startTool`) and has `readingRef` = `activeToolType === 'hand' && !textMode`: in that state
+  `handlePointerDownCapture` treats the mouse, a stylus and a finger like the read-only shared view (`beginPan`: a drag moves the page —
+  finger with inertia and the book-mode swipe — and a tap opens a link or double-taps to fit) instead of starting a stroke; the
+  stylus's eraser button still erases. On mouse devices (`isMouseDevice`) the dock has a **Hand** button (`tool-hand`, before the pen;
+  the Finger button then shows a fingerprint icon so there are not two hands). `chooseTool('hand')` is the Tools flyout's too.
+  The eraser button and select-text mode remember what they borrowed the tool from (`toolBeforeEraser`, `toolBeforeText`) and give it
+  back — leaving them must not turn the pen on. Anything new that has to work "whatever tool is in hand" must include `readingRef`
+  (see `linksOn`). The harness's `testDefaults` injects `startTool: 'pen'` (nearly every scenario writes at once); only `hand` uses the
+  real defaults. Headless Chrome is a "computer"; `setViewport({ isMobile: true, hasTouch: true })` makes it a coarse-pointer one.
 - **Links inside the PDF** (`reader/pdfLinks.js` pure + `LinkIndex`, `lib/openExternal.js`; wired in `ReaderCanvas`: `linksOn`, `linkAt`,
   `openLink`, `tapLink`, `updateLinkHover`): the page is canvas-drawn, so a link only works because we ask pdf.js for the page's
   `getAnnotations()` (once per page, for the pages on screen, from `syncPaper`; `LinkIndex.peek` answers synchronously so a tap never
@@ -211,9 +223,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 184 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 187 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, start tool, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links library big   (343 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links hand library big   (364 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 

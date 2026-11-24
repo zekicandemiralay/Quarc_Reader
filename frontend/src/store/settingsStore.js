@@ -16,6 +16,7 @@ const DEFAULTS = {
   // Handwriting (same as Quarc Notes)
   fingerMode: 'scroll', // 'scroll' | 'draw' — how a finger works when a document opens (the dock's Finger button changes it for that reading only)
   shapeSnap: true, // hold the pen still at the end of a stroke to turn it into a clean shape
+  startTool: 'auto', // what a document opens with: 'auto' (the hand with a mouse, the pen on a touch screen) | 'pen' | 'hand'
   tool: 'pen', // 'pen' | 'highlighter'
   penSize: 2.5,
   penColor: '#1f2937',

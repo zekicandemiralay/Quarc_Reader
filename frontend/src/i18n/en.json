@@ -22,6 +22,7 @@
     "haveAccount": "Already have an account? Sign in"
   },
   "canvas": {
+    "hand": "Hand: move the page",
     "pen": "Pen",
     "highlighter": "Highlighter",
     "undo": "Undo",
@@ -365,6 +366,11 @@
     "keepAwake": "Keep the screen on while reading",
     "keepAwakeHint": "While a document is open the screen does not dim or lock by itself. Uses a little more battery.",
     "handwriting": "Handwriting",
+    "startTool": "Start with",
+    "startToolHint": "What a document opens with. Automatic: the hand (a drag moves the page) with a mouse, the pen on a touch screen. Press the pen on the dock to write with the mouse.",
+    "startAuto": "Automatic",
+    "startPen": "Pen",
+    "startHand": "Hand",
     "finger": "Finger",
     "fingerHint": "How a finger works when a document opens. Scrolling is the default; the Finger button on the dock turns drawing on for that reading only.",
     "about": "About",

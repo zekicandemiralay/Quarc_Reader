@@ -75,7 +75,12 @@ opens, where you left off.
 
 ## Writing and highlighting
 
-The floating dock at the top of the page has **Pen**, **Highlighter**, **Eraser**, **Select text** and **Snip**, with colours and
+**On a computer** (the desktop app, or a browser with a mouse) a document opens with the **Hand** selected: dragging with the mouse
+moves the page and nothing is written. Press **Pen** (or **Highlighter**) on the dock to write with the mouse, and the Hand again
+to go back to moving the page. On a phone or tablet the pen is selected as before. You can change this with
+**Settings → Handwriting → Start with** (Automatic / Pen / Hand).
+
+The floating dock at the top of the page has **Hand** (on a computer), **Pen**, **Highlighter**, **Eraser**, **Select text** and **Snip**, with colours and
 sizes, **undo/redo** (Ctrl+Z / Ctrl+Y — they take back *everything*: strokes, text highlights, notes, bookmarks and inserted or
 deleted note pages) and the **Finger** switch. The **Tools** button next to it opens everything else (shapes, arrows, text,
 image…) plus the **cut selection** tools; the slider icon has **Snap shapes** and **Snap to text**. The bar at the bottom turns

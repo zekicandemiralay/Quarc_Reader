@@ -22,6 +22,7 @@
     "haveAccount": "Zaten hesabın var mı? Giriş yap"
   },
   "canvas": {
+    "hand": "El: sayfayı kaydır",
     "pen": "Kalem",
     "highlighter": "Fosforlu kalem",
     "undo": "Geri al",
@@ -365,6 +366,11 @@
     "keepAwake": "Okurken ekranı açık tut",
     "keepAwakeHint": "Bir belge açıkken ekran kendiliğinden kararmaz ya da kilitlenmez. Biraz daha fazla pil harcar.",
     "handwriting": "El yazısı",
+    "startTool": "Şununla başla",
+    "startToolHint": "Bir belge neyle açılır. Otomatik: fareyle el (sürüklemek sayfayı kaydırır), dokunmatik ekranda kalem. Fareyle yazmak için araç çubuğundaki kaleme basın.",
+    "startAuto": "Otomatik",
+    "startPen": "Kalem",
+    "startHand": "El",
     "finger": "Parmak",
     "fingerHint": "Bir belge açıldığında parmağın ne yapacağı. Varsayılan kaydırmadır; araç çubuğundaki Parmak düğmesi çizmeyi yalnızca o okuma için açar.",
     "about": "Hakkında",

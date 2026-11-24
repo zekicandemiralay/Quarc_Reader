@@ -61,6 +61,7 @@ async function main() {
       ['tools', scenarioTools],
       ['undo', scenarioUndo],
       ['links', scenarioLinks],
+      ['hand', scenarioHand],
       ['library', scenarioLibrary],
       ['big', scenarioBig],
     ];
@@ -2555,6 +2556,164 @@ async function scenarioLinks(browser, state) {
   await page.click('[data-testid="tool-eraser"]');
 
   check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// A rough picture of the paper: dark pixels per horizontal band. It changes when the page is moved.
+const paperBands = (page) =>
+  page.evaluate(() => {
+    const canvas = document.querySelector('.quarc-canvas-page canvas');
+    const { width, height } = canvas;
+    const data = canvas.getContext('2d').getImageData(0, 0, width, height).data;
+    const bands = new Array(12).fill(0);
+    for (let y = 0; y < height; y++) {
+      let n = 0;
+      for (let x = 0; x < width; x += 2) if ((data[(y * width + x) * 4] + data[(y * width + x) * 4 + 1] + data[(y * width + x) * 4 + 2]) / 3 < 90) n++;
+      bands[Math.min(11, Math.floor((y * 12) / height))] += n;
+    }
+    return bands.join(',');
+  });
+
+// The real defaults — except for what the app asks every time (reading style) and the sepia paper — and a stand-in for opening a new tab.
+const realDefaults = (page) =>
+  page.evaluateOnNewDocument(() => {
+    let current = {};
+    try {
+      current = JSON.parse(localStorage.getItem('quarc_reader_settings') || '{}');
+    } catch {
+      /* start from nothing */
+    }
+    localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 3, readMode: 'scroll', paperMode: 'white', ...current }));
+    window.__opened = [];
+    window.open = (url) => {
+      window.__opened.push(String(url));
+      return null;
+    };
+  });
+
+async function scenarioHand(browser, state) {
+  section('On a computer the hand is in hand: the mouse moves the page until the pen is pressed');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+  await realDefaults(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const pressed = (testId) => page.$eval(`[data-testid="${testId}"]`, (el) => el.getAttribute('aria-pressed'));
+  const ink = async () => (await madeSoFar(page)).ink;
+  const opened = () => page.evaluate(() => window.__opened);
+
+  await login(page, 'pia');
+  await chooseOnImport(page, state.linksPdfPath, 'device only');
+  await readerReady(page);
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  check('the dock has a Hand button, and it is the one in hand', !!(await page.$('[data-testid="tool-hand"]')) && (await pressed('tool-hand')) === 'true');
+  check('the pen and the highlighter are not selected', (await pressed('tool-pen')) !== 'true' && (await pressed('tool-highlighter')) !== 'true');
+  await shot(page, '99-hand-default');
+
+  // Where the link is: the highlighter shows the text; the hand button takes it away again.
+  await page.click('[data-testid="tool-highlighter"]');
+  await waitUntil(() => spanRect(page, 'Open the Quarc site'), { label: 'text geometry' });
+  await sleep(600);
+  const site = await spanRect(page, 'Open the Quarc site');
+  check('pressing the highlighter takes it in hand instead of the hand', (await pressed('tool-highlighter')) === 'true' && (await pressed('tool-hand')) !== 'true');
+  await page.click('[data-testid="tool-hand"]');
+  await sleep(500);
+  check('pressing the hand takes it back', (await pressed('tool-hand')) === 'true' && (await pressed('tool-highlighter')) !== 'true');
+
+  // ----- a tap on a link opens it -----
+  await page.mouse.click(site.x + site.w / 2, site.y + site.h / 2);
+  await sleep(600);
+  check('with the hand a click on a link opens it', JSON.stringify(await opened()) === JSON.stringify(['https://example.com/quarc']), JSON.stringify(await opened()));
+  await sleep(1200);
+  check('...and writes nothing', (await ink()) === 0);
+
+  // ----- a drag moves the page and writes nothing -----
+  const before = await paperBands(page);
+  await page.mouse.move(box.x + 640, box.y + 700);
+  await page.mouse.down();
+  for (let i = 1; i <= 12; i++) {
+    await page.mouse.move(box.x + 640, box.y + 700 - i * 25);
+    await sleep(15);
+  }
+  await page.mouse.up();
+  await sleep(1500);
+  check('dragging with the mouse writes nothing', (await ink()) === 0);
+  check('...it moves the page', (await paperBands(page)) !== before);
+
+  // ----- the pen: the mouse writes -----
+  await page.click('[data-testid="tool-pen"]');
+  check('pressing the pen takes it in hand', (await pressed('tool-pen')) === 'true' && (await pressed('tool-hand')) !== 'true');
+  await drawStroke(page, { x: box.x + 300, y: box.y + 600 }, { x: box.x + 700, y: box.y + 610 });
+  await sleep(1600);
+  check('and then the mouse writes', (await ink()) === 1);
+  await page.click('[data-testid="tool-hand"]');
+  await drawStroke(page, { x: box.x + 300, y: box.y + 650 }, { x: box.x + 700, y: box.y + 660 });
+  await sleep(1600);
+  check('with the hand again it writes nothing', (await ink()) === 1 && (await pressed('tool-hand')) === 'true');
+
+  // ----- the eraser and select-text give back what was in hand -----
+  await page.click('[data-testid="tool-eraser"]');
+  check('the eraser is in hand', (await pressed('tool-eraser')) === 'true' && (await pressed('tool-hand')) !== 'true');
+  await page.click('[data-testid="tool-eraser"]');
+  check('pressing it again gives the hand back (not the pen)', (await pressed('tool-hand')) === 'true' && (await pressed('tool-pen')) !== 'true');
+  await page.click('[data-testid="tool-pen"]');
+  await page.click('[data-testid="tool-eraser"]');
+  await page.click('[data-testid="tool-eraser"]');
+  check('and after the pen, the pen', (await pressed('tool-pen')) === 'true');
+  await page.click('[data-testid="tool-hand"]');
+  await page.click('button[aria-label="Select text to highlight"]');
+  await sleep(500);
+  await page.click('button[aria-label="Select text to highlight"]');
+  await sleep(500);
+  check('leaving select-text mode gives the hand back', (await pressed('tool-hand')) === 'true' && (await pressed('tool-pen')) !== 'true');
+
+  // ----- the setting -----
+  await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle0' });
+  const choose = async (label) => {
+    await page.evaluate((l) => {
+      const row = [...document.querySelectorAll('p')].find((p) => p.textContent === 'Start with').parentElement.parentElement;
+      [...row.querySelectorAll('button')].find((b) => b.textContent === l)?.click();
+    }, label);
+    await sleep(300);
+    return page.evaluate((l) => {
+      const row = [...document.querySelectorAll('p')].find((p) => p.textContent === 'Start with').parentElement.parentElement;
+      return [...row.querySelectorAll('button')].find((b) => b.textContent === l)?.getAttribute('aria-pressed');
+    }, label);
+  };
+  check('Settings has "Start with": Automatic is chosen', (await page.evaluate(() => [...[...document.querySelectorAll('p')].find((p) => p.textContent === 'Start with').parentElement.parentElement.querySelectorAll('button')].find((b) => b.textContent === 'Automatic')?.getAttribute('aria-pressed'))) === 'true');
+  check('...Pen can be chosen', (await choose('Pen')) === 'true');
+  await page.goto(BASE, { waitUntil: 'networkidle0' });
+  await page.evaluate(() => [...document.querySelectorAll('main p.line-clamp-2')].find((p) => p.textContent.length)?.closest('.cursor-pointer, div.group')?.click());
+  await page.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 15000 });
+  await waitUntil(async () => (await paperStats(page))?.dark > 100, { label: 'the document to open again' });
+  await sleep(800);
+  check('with Pen chosen a document opens with the pen in hand', (await pressed('tool-pen')) === 'true' && (await pressed('tool-hand')) !== 'true');
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+
+  // ----- a touch screen starts with the pen, and has no Hand button -----
+  const touch = await ctx.newPage();
+  await touch.setViewport({ width: 820, height: 1100, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+  await touch.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+  await realDefaults(touch);
+  await touch.evaluateOnNewDocument(() => localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 3, readMode: 'scroll', paperMode: 'white' })));
+  await touch.goto(BASE, { waitUntil: 'networkidle0' });
+  const coarse = await touch.evaluate(() => matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches);
+  if (!coarse) {
+    console.log('  (this browser does not emulate a coarse pointer: the touch-screen check is covered by the unit tests only)');
+  } else {
+    await touch.evaluate(() => [...document.querySelectorAll('main p.line-clamp-2')].find((p) => p.textContent.length)?.closest('.cursor-pointer, div.group')?.click());
+    await touch.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 15000 });
+    await touch.waitForSelector('[data-testid="tool-pen"]', { timeout: 15000 });
+    await sleep(800);
+    check('on a touch screen a document opens with the pen in hand', (await touch.$eval('[data-testid="tool-pen"]', (el) => el.getAttribute('aria-pressed'))) === 'true');
+    check('...and the dock has no Hand button', !(await touch.$('[data-testid="tool-hand"]')));
+  }
+  await touch.close();
   await ctx.close();
 }
 

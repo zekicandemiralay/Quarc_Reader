@@ -298,7 +298,7 @@ export async function testDefaults(page, extra = {}) {
       } catch {
         /* start from nothing */
       }
-      localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 3, readMode: 'scroll', paperMode: 'white', ...extra, ...current }));
+      localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 3, readMode: 'scroll', paperMode: 'white', startTool: 'pen', ...extra, ...current }));
     },
     extra
   );
