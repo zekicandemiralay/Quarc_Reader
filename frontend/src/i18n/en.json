@@ -292,6 +292,10 @@
     "copyFallback": "Copying pictures is not available here: the share sheet opened instead.",
     "failed": "The picture could not be made."
   },
+  "link": {
+    "jumped": "Page {{n}}",
+    "back": "Back"
+  },
   "find": {
     "title": "Find in document",
     "placeholder": "Find in document",

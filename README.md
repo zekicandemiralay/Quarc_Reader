@@ -15,9 +15,10 @@ iOS (as a PWA).
   **copy its text**; Ctrl+V pastes any picture or text onto a page, ready to move
 - **Write on the pages** — the Quarc Notes engine: pressure-sensitive pen, highlighter, hold-to-snap shapes, an eraser on the dock
   (and the stylus's own eraser end), a colour picker with your recent colours,
-  MS-Paint-style cut selection, every Excalidraw tool (shapes, arrows, text, images), palm rejection, undo/redo
+  MS-Paint-style cut selection, every Excalidraw tool (shapes, arrows, text, images), palm rejection, undo/redo of everything (strokes, highlights, notes, note pages, bookmarks)
 - **Real text highlights** — select text (or just swipe the highlighter over it: it **snaps to the words**) and it becomes a
   highlight / underline / strike-through with an optional note; listed in a notes panel; tap one to edit it
+- **Links in the PDF work** — a tap opens a web link or jumps to the page a table-of-contents entry or footnote points at (with a Back button)
 - **Note pages** — insert a blank, lined, squared or dotted page anywhere in a PDF and write on it
 - **Save the PDF with your notes in it** — ink as sharp vector lines, highlights as real PDF highlight annotations that other readers show, note pages as real pages. Save a copy, or replace the document in your library (the original is kept and
   can be restored)

@@ -45,6 +45,44 @@ export function deleteMark(marks, id) {
   return marks.map((m) => (m.id === id ? { ...m, del: true, u: Date.now() } : m));
 }
 
+// ----- undo ---------------------------------------------------------------------------
+//
+// Undoing a change to marks must travel to the other devices like any other change, and the merge keeps the newer `u`
+// of each id — so an undo is never "put the old list back" but "make these marks what they were, as of now".
+
+const withoutStamp = ({ u, ...rest }) => JSON.stringify(rest); // eslint-disable-line no-unused-vars
+
+// Which marks differ between two lists (ignoring their timestamps): { ids, before: Map, after: Map }.
+export function markChanges(before, after) {
+  const b = new Map((before || []).map((m) => [m.id, m]));
+  const a = new Map((after || []).map((m) => [m.id, m]));
+  const ids = [];
+  for (const id of new Set([...b.keys(), ...a.keys()])) {
+    const x = b.get(id);
+    const y = a.get(id);
+    if (!x || !y || withoutStamp(x) !== withoutStamp(y)) ids.push(id);
+  }
+  return { ids, before: b, after: a };
+}
+
+// `list` with the marks `ids` made what `snapshot` (Map id -> mark) says, stamped as of `now`. A mark the snapshot does
+// not have (it was created by the step being undone) is deleted — as a tombstone, so the deletion syncs.
+export function restoreMarks(list, ids, snapshot, now = Date.now()) {
+  let out = list || [];
+  for (const id of ids) {
+    const want = snapshot.get(id);
+    const have = out.find((m) => m.id === id);
+    const u = Math.max(now, (have?.u || 0) + 1, (want?.u || 0) + 1);
+    if (want) {
+      const restored = { ...want, u };
+      out = have ? out.map((m) => (m.id === id ? restored : m)) : [...out, restored];
+    } else if (have && !have.del) {
+      out = out.map((m) => (m.id === id ? { ...have, del: true, u } : m));
+    }
+  }
+  return out;
+}
+
 // ----- geometry ----------------------------------------------------------------------
 
 // The browser reports a selection as many small rectangles (one per text

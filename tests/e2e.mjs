@@ -38,6 +38,7 @@ async function main() {
     dataDir: stack.data, // the backend's data folder (the uploaded PDFs are in files/<user>/<sha256>)
     pdfPath: writePdf('test.pdf', await makeTestPdf()),
     bigPdfPath: writePdf('test-big.pdf', await makeTestPdf({ junkBytes: 6 * 1024 * 1024 })),
+    linksPdfPath: writePdf('test-links.pdf', await makeTestPdf({ links: true })),
   };
 
   try {
@@ -58,6 +59,8 @@ async function main() {
       ['snip', scenarioSnip],
       ['pen', scenarioPen],
       ['tools', scenarioTools],
+      ['undo', scenarioUndo],
+      ['links', scenarioLinks],
       ['library', scenarioLibrary],
       ['big', scenarioBig],
     ];
@@ -173,7 +176,9 @@ async function scenarioLocal(browser, state) {
   check("and page 1's stored ink is unchanged", rows.find((r) => r.page_key === 'p0')?.ink_json === p0Before);
   await shot(page, '06-page-2');
 
-  check('no page errors', errors.filter((e) => !/401/.test(e)).length === 0, errors.join('\n'));
+  // The 401 is the sign-in check before logging in. Recent Chrome also reports "unload is not allowed" for the listener that
+  // Excalidraw itself registers on window (not ours; nothing in src/ uses unload).
+  check('no page errors', errors.filter((e) => !/401|Permissions policy violation: unload/.test(e)).length === 0, errors.join('\n'));
   await ctx.close();
 }
 
@@ -2153,6 +2158,373 @@ async function scenarioTools(browser, state) {
   check('the pen strokes and shapes are vector paths', (content.match(/\nf\n|\nS\n|\nB\n/g) || []).length >= 4, `${(content.match(/\nS\n/g) || []).length} S, ${(content.match(/\nf\n/g) || []).length} f`);
   check('the typed text came out (Excalidraw drew it) as an image on the page', /\/Image\d* Do|\bDo\n/.test(content) || (out.getPage(0).node.Resources()?.lookup?.(await import('pdf-lib').then((m) => m.PDFName.of('XObject'))) ?? null) !== null);
   await shot(page, '93-after-export');
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// What the person has made, as the database holds it (undone things are tombstones, so only live ones count).
+async function madeSoFar(page) {
+  const db = await dumpDb(page);
+  const rows = db.ann || [];
+  const doc = db.docs?.[0] || {};
+  const ink = rows.flatMap((r) => JSON.parse(r.ink_json).elements.filter((e) => !e.isDeleted).map((e) => ({ ...e, page_key: r.page_key })));
+  const marks = rows.flatMap((r) => JSON.parse(r.marks_json).filter((m) => !m.del).map((m) => ({ ...m, page_key: r.page_key })));
+  const notes = (doc.layout || []).filter((it) => it.t === 'n' && !it.del);
+  const bookmarks = (doc.bookmarks || []).filter((b) => !b.del);
+  return { ink: ink.length, marks: marks.length, notes: notes.length, bookmarks: bookmarks.length, detail: { ink, marks, notes, bookmarks, layout: doc.layout || [] } };
+}
+const made = (m) => `ink ${m.ink}, highlights ${m.marks}, note pages ${m.notes}, bookmarks ${m.bookmarks}`;
+
+async function scenarioUndo(browser, state) {
+  section('Undo and redo take back everything, not just strokes');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('dialog', (d) => d.accept());
+  await login(page, 'uma');
+  await chooseOnImport(page, state.pdfPath, 'device only');
+  await readerReady(page);
+  const box = await page.$eval('.quarc-canvas-page', (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y };
+  });
+  const settle = () => sleep(1700);
+  const press = async (key, { shift = false } = {}) => {
+    await page.keyboard.down('Control');
+    if (shift) await page.keyboard.down('Shift');
+    await page.keyboard.press(key);
+    if (shift) await page.keyboard.up('Shift');
+    await page.keyboard.up('Control');
+    await settle();
+  };
+  const undoButton = async () => {
+    await page.click('[data-testid="undo"]');
+    await settle();
+  };
+  const redoButton = async () => {
+    await page.click('[data-testid="redo"]');
+    await settle();
+  };
+
+  // ----- make five different things -----
+  // 1. a stroke on page 1
+  await page.click('button[aria-label="#e03131"]');
+  await drawStroke(page, { x: box.x + 200, y: box.y + 640 }, { x: box.x + 600, y: box.y + 650 });
+  await settle();
+  // 2. a highlight made by the pencil highlighter, snapped to the words under it
+  await page.click('[data-testid="tool-highlighter"]');
+  await waitUntil(() => spanRect(page, 'to interest me'), { label: 'text geometry in highlighter mode' });
+  await sleep(500);
+  const line = await spanRect(page, 'to interest me');
+  await drawStroke(page, { x: line.x + line.w * 0.09, y: line.y + line.h / 2 }, { x: line.x + line.w * 0.36, y: line.y + line.h / 2 + 1 }, 14);
+  await settle();
+  await page.click('[data-testid="tool-pen"]');
+  let m = await madeSoFar(page);
+  check('a stroke and a snapped highlight are there', m.ink === 1 && m.marks === 1, made(m));
+  // 3. a note page after page 1
+  await menuClick(page, 'More', 'Insert a note page here');
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Lined'), { timeout: 5000 });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Lined')?.click());
+  await waitIndicator(page, '2/4');
+  await sleep(900);
+  // 4. a bookmark on it
+  await page.click('button[aria-label="Bookmark this page"]');
+  await settle();
+  // 5. a stroke on the note page
+  await drawStroke(page, { x: box.x + 300, y: box.y + 300 }, { x: box.x + 700, y: box.y + 330 });
+  await settle();
+  m = await madeSoFar(page);
+  check('all five are made: 2 strokes, a highlight, a note page, a bookmark', m.ink === 2 && m.marks === 1 && m.notes === 1 && m.bookmarks === 1, made(m));
+  const noteKey = `n${m.detail.notes[0]?.id}`;
+  check('the second stroke is on the note page', m.detail.ink.some((e) => e.page_key === noteKey));
+  await shot(page, '95-undo-made');
+
+  // ----- undo them one by one with the dock button, newest first -----
+  await undoButton();
+  m = await madeSoFar(page);
+  check('undo 1: the stroke on the note page goes', m.ink === 1 && m.notes === 1 && m.bookmarks === 1 && m.marks === 1, made(m));
+  await undoButton();
+  m = await madeSoFar(page);
+  check('undo 2: the bookmark goes', m.bookmarks === 0 && m.notes === 1 && m.marks === 1, made(m));
+  await undoButton();
+  m = await madeSoFar(page);
+  check('undo 3: the note page goes (the document is back to 3 pages)', m.notes === 0 && m.marks === 1 && m.ink === 1 && m.detail.layout.length === 4, made(m));
+  check('...as a deletion that is kept, so it syncs', m.detail.layout.some((it) => it.t === 'n' && it.del === true), JSON.stringify(m.detail.layout));
+  await waitUntil(async () => /\/\s*3/.test((await indicator(page)) || ''), { label: 'the page count to be 3 again' });
+  await undoButton();
+  m = await madeSoFar(page);
+  check('undo 4: the text highlight made by the pencil goes', m.marks === 0 && m.ink === 1, made(m));
+  await page.click('button[aria-label="Notes and highlights"]');
+  await sleep(500);
+  check('...and the notes list no longer shows it', !/interest/.test(await page.$eval('aside', (el) => el.innerText)));
+  await page.click('button[aria-label="Close"]');
+  await undoButton();
+  m = await madeSoFar(page);
+  check('undo 5: the first stroke goes', m.ink === 0 && m.marks === 0 && m.notes === 0 && m.bookmarks === 0, made(m));
+  check('...and nothing is painted red any more', (await inkPixels(page, RED)) < 30, `${await inkPixels(page, RED)} red pixels`);
+  await undoButton();
+  m = await madeSoFar(page);
+  check('undo with nothing left changes nothing and breaks nothing', m.ink === 0 && m.marks === 0 && m.notes === 0 && errors.length === 0, made(m));
+
+  // ----- redo them in the same order -----
+  await redoButton();
+  m = await madeSoFar(page);
+  check('redo 1: the first stroke is back', m.ink === 1 && m.marks === 0, made(m));
+  await redoButton();
+  m = await madeSoFar(page);
+  check('redo 2: the highlight is back, on its words', m.marks === 1 && /interest/.test(m.detail.marks[0]?.text || ''), made(m));
+  await redoButton();
+  m = await madeSoFar(page);
+  check('redo 3: the note page is back', m.notes === 1 && m.detail.notes[0].id === noteKey.slice(1), made(m));
+  await redoButton();
+  await redoButton();
+  m = await madeSoFar(page);
+  check('redo 4 and 5: the bookmark and the stroke on the note page', m.bookmarks === 1 && m.ink === 2 && m.detail.ink.some((e) => e.page_key === noteKey), made(m));
+  await redoButton();
+  m = await madeSoFar(page);
+  check('redo with nothing left changes nothing', m.ink === 2 && m.marks === 1 && m.notes === 1 && m.bookmarks === 1, made(m));
+  await shot(page, '96-undo-redone');
+
+  // ----- the keyboard does the same -----
+  await press('KeyZ');
+  m = await madeSoFar(page);
+  check('Ctrl+Z undoes the last thing', m.ink === 1 && m.bookmarks === 1, made(m));
+  await press('KeyZ');
+  m = await madeSoFar(page);
+  check('...and the one before it (a bookmark, not only strokes)', m.bookmarks === 0, made(m));
+  await press('KeyZ', { shift: true });
+  m = await madeSoFar(page);
+  check('Ctrl+Shift+Z redoes', m.bookmarks === 1 && m.ink === 1, made(m));
+  await press('KeyY');
+  m = await madeSoFar(page);
+  check('Ctrl+Y redoes too', m.ink === 2 && m.bookmarks === 1, made(m));
+
+  // ----- doing something new ends the redo list -----
+  await press('KeyZ');
+  await drawStroke(page, { x: box.x + 200, y: box.y + 520 }, { x: box.x + 640, y: box.y + 540 });
+  await settle();
+  m = await madeSoFar(page);
+  check('a new stroke after an undo is kept', m.ink === 2, made(m));
+  await press('KeyY');
+  m = await madeSoFar(page);
+  check('...and the undone stroke can no longer be redone over it', m.ink === 2, made(m));
+
+  // ----- a swipe of the eraser over a stroke and a highlight is one step -----
+  await page.keyboard.press('Home');
+  await sleep(900);
+  await page.click('[data-testid="tool-highlighter"]');
+  await waitUntil(() => spanRect(page, 'to interest me'), { label: 'text geometry again' });
+  await sleep(500);
+  const line2 = await spanRect(page, 'to interest me');
+  await page.click('[data-testid="tool-pen"]');
+  await drawStroke(page, { x: line2.x + line2.w * 0.5, y: line2.y - 40 }, { x: line2.x + line2.w * 0.5 + 6, y: line2.y + 50 }, 10);
+  await settle();
+  const before = await madeSoFar(page);
+  // the stylus' eraser button, swept along the highlighted line, across the stroke
+  const cdp = await page.createCDPSession();
+  const ey = line2.y + line2.h / 2;
+  await penStroke(cdp, [{ x: line2.x + 4, y: ey }, ...Array.from({ length: 24 }, (_, i) => ({ x: line2.x + 4 + ((line2.w - 8) * (i + 1)) / 24, y: ey }))], { buttons: 2, button: 'right' });
+  await settle();
+  const erased = await madeSoFar(page);
+  check('one swipe of the eraser took a stroke and a highlight', erased.ink === before.ink - 1 && erased.marks === before.marks - 1, `${made(before)} -> ${made(erased)}`);
+  await press('KeyZ');
+  const unerased = await madeSoFar(page);
+  check('one undo brings both back', unerased.ink === before.ink && unerased.marks === before.marks, made(unerased));
+  await press('KeyY');
+  const reerased = await madeSoFar(page);
+  check('and one redo takes both away again', reerased.ink === erased.ink && reerased.marks === erased.marks, made(reerased));
+  await press('KeyZ');
+
+  // the eraser button on the dock (Excalidraw's own eraser) is undone too
+  await page.click('[data-testid="tool-eraser"]');
+  await page.mouse.move(line2.x + line2.w * 0.5 + 3, line2.y - 30);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(line2.x + line2.w * 0.5 + 3, line2.y - 30 + i * 8);
+    await sleep(15);
+  }
+  await page.mouse.up();
+  await settle();
+  const dockErased = await madeSoFar(page);
+  check('the dock eraser takes the stroke away', dockErased.ink === before.ink - 1, `${made(before)} -> ${made(dockErased)}`);
+  await page.click('[data-testid="tool-eraser"]'); // back to the pen
+  await press('KeyZ');
+  const dockBack = await madeSoFar(page);
+  check('and undo brings it back', dockBack.ink === before.ink, made(dockBack));
+
+  // ----- deleting a note page can be undone, with what was written on it -----
+  await page.click('button[aria-label="Notes and highlights"]');
+  await sleep(500);
+  await page.evaluate(() => [...document.querySelectorAll('aside button')].find((b) => /Page 2/.test(b.innerText))?.click());
+  await waitIndicator(page, '2/4');
+  await sleep(700);
+  const withNote = await madeSoFar(page);
+  await menuClick(page, 'More', 'Delete this note page');
+  await settle();
+  const gone = await madeSoFar(page);
+  check('deleting the note page removes it', gone.notes === 0, made(gone));
+  await press('KeyZ');
+  const back = await madeSoFar(page);
+  check('undo brings the note page back', back.notes === 1 && back.detail.notes[0].id === withNote.detail.notes[0].id, made(back));
+  check('...with the stroke written on it', back.detail.ink.some((e) => e.page_key === noteKey), JSON.stringify(back.detail.ink.map((e) => e.page_key)));
+  await waitUntil(async () => (await indicator(page)) !== null && /\/\s*4/.test((await indicator(page)) || ''), { label: 'four pages again' });
+  await page.keyboard.press('Home');
+  await sleep(500);
+  await page.click('button[aria-label="Notes and highlights"]');
+  await sleep(400);
+  await page.evaluate(() => [...document.querySelectorAll('aside button')].find((b) => /Page 2/.test(b.innerText))?.click());
+  await sleep(1500);
+  const red = await inkPixels(page, RED);
+  check('the stroke on the restored note page is drawn again', red > 200, `${red} red pixels`);
+  await shot(page, '97-undo-note-restored');
+
+  // ----- the dock buttons and a reload: what was undone stays undone -----
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await indicator(page)) !== null, { label: 'reader after reload' }); // it opens where it was left: on a note page, which has no text to wait for
+  await sleep(1800);
+  const afterReload = await madeSoFar(page);
+  check('after a reload everything that is not undone is still there', afterReload.ink === back.ink && afterReload.marks === back.marks && afterReload.notes === 1, made(afterReload));
+
+  // ----- a note page inserted ABOVE a stroke does not turn that stroke into a step of its own -----
+  await page.keyboard.press('End');
+  await sleep(1000);
+  await drawStroke(page, { x: box.x + 300, y: box.y + 300 }, { x: box.x + 650, y: box.y + 320 });
+  await settle();
+  const below = await madeSoFar(page);
+  check('a stroke on the last page', below.ink === afterReload.ink + 1 && below.detail.ink.some((e) => e.page_key === 'p2'), made(below));
+  await page.keyboard.press('Home');
+  await sleep(1000);
+  await menuClick(page, 'More', 'Insert a note page here');
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Lined'), { timeout: 5000 });
+  await page.evaluate(() => [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === 'Lined')?.click());
+  await waitIndicator(page, '2/5');
+  await settle();
+  const inserted = await madeSoFar(page);
+  check('a second note page goes in above it', inserted.notes === 2 && inserted.ink === below.ink, made(inserted));
+  await press('KeyZ');
+  const undoneInsert = await madeSoFar(page);
+  check('one undo takes that page away again (the shifted stroke is not a step)', undoneInsert.notes === 1 && undoneInsert.ink === below.ink && undoneInsert.detail.ink.some((e) => e.page_key === 'p2'), made(undoneInsert));
+  await press('KeyZ');
+  const undoneStroke = await madeSoFar(page);
+  check('the next undo takes the stroke itself', undoneStroke.ink === below.ink - 1 && undoneStroke.notes === 1, made(undoneStroke));
+
+  check('no page errors', errors.length === 0, errors.join('\n'));
+  await ctx.close();
+}
+
+// Pixels of the link-hover outline (violet, on the canvas that is drawn above the ink).
+const violetPixels = (page) =>
+  page.evaluate(() => {
+    let n = 0;
+    for (const canvas of document.querySelectorAll('.quarc-canvas-page canvas')) {
+      if (canvas.closest('.excalidraw') || !canvas.width || !canvas.height) continue;
+      const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 0; i < data.length; i += 4) if (data[i + 3] > 120 && Math.abs(data[i] - 124) < 14 && Math.abs(data[i + 1] - 58) < 14 && Math.abs(data[i + 2] - 237) < 14) n++;
+    }
+    return n;
+  });
+
+async function scenarioLinks(browser, state) {
+  section('Links inside a PDF open on a plain tap');
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  // Opening a new tab is recorded instead (the headless browser would open one nobody can see).
+  await page.evaluateOnNewDocument(() => {
+    window.__opened = [];
+    window.open = (url) => {
+      window.__opened.push(String(url));
+      return null;
+    };
+  });
+  await login(page, 'lena');
+  await chooseOnImport(page, state.linksPdfPath, 'device only');
+  await readerReady(page);
+  const opened = () => page.evaluate(() => window.__opened);
+  const centre = (r) => ({ x: r.x + r.w / 2, y: r.y + r.h / 2 });
+  const tap = async (r) => {
+    const c = centre(r);
+    await page.mouse.click(c.x, c.y);
+    await sleep(500);
+  };
+
+  // Where the lines are: the text layer shows them while the highlighter is on, and the view stays when the pen comes back.
+  await page.click('[data-testid="tool-highlighter"]');
+  await waitUntil(() => spanRect(page, 'Open the Quarc site'), { label: 'text geometry' });
+  await sleep(700);
+  const site = await spanRect(page, 'Open the Quarc site');
+  const jump = await spanRect(page, 'Jump to chapter 3');
+  const script = await spanRect(page, 'Run a script');
+  await page.click('[data-testid="tool-pen"]');
+  await sleep(600);
+  check('the three link lines are on the page', !!site && !!jump && !!script);
+
+  // ----- hovering -----
+  await page.mouse.move(centre(site).x, centre(site).y);
+  await sleep(500);
+  const hovered = await violetPixels(page);
+  check('the mouse over a link outlines it', hovered > 30, `${hovered} outline pixels`);
+  await shot(page, '99-link-hover');
+  await page.mouse.move(centre(site).x, site.y - 150);
+  await sleep(500);
+  check('...and the outline goes when the mouse leaves it', (await violetPixels(page)) < 5);
+
+  // ----- a web address -----
+  await tap(site);
+  check('a tap on a web link opens its address', JSON.stringify(await opened()) === JSON.stringify(['https://example.com/quarc']), JSON.stringify(await opened()));
+  await sleep(1300);
+  check('...and the pen leaves no dot behind', (await madeSoFar(page)).ink === 0, made(await madeSoFar(page)));
+
+  // ----- a drag over the same words is still writing -----
+  await drawStroke(page, { x: site.x + 3, y: site.y + site.h / 2 }, { x: site.x + site.w - 3, y: site.y + site.h / 2 + 4 }, 10);
+  await sleep(1500);
+  check('dragging the pen over a link draws, it does not open it', (await opened()).length === 1 && (await madeSoFar(page)).ink === 1, `${(await opened()).length} opened, ${made(await madeSoFar(page))}`);
+
+  // ----- a script is not a link -----
+  await tap(script);
+  check('a link that runs a script is not followed', (await opened()).length === 1, JSON.stringify(await opened()));
+
+  // ----- a jump to another page, and the way back -----
+  await tap(jump);
+  await waitIndicator(page, '3/3');
+  check('a tap on an in-document link goes to its page', true);
+  const toasts = await page.evaluate(() => [...document.querySelectorAll('[class*="z-[1200]"]')].map((el) => el.innerText).join(' | '));
+  check('with a "Back" button to return', /Page 3/.test(toasts) && /Back/.test(toasts), toasts);
+  await shot(page, '99-link-jumped');
+  await page.evaluate(() => [...document.querySelectorAll('[class*="z-[1200]"] button')].find((b) => b.innerText.trim() === 'Back')?.click());
+  await waitIndicator(page, '1/3');
+  await sleep(600);
+  check('Back returns to where the link was', true);
+
+  // ----- the other ways of reading -----
+  await page.click('button[aria-label="Select text to highlight"]');
+  await waitUntil(() => spanRect(page, 'Open the Quarc site'), { label: 'text layer' });
+  await sleep(500);
+  const siteText = await spanRect(page, 'Open the Quarc site');
+  await tap(siteText);
+  await sleep(300);
+  check('in the select-text mode a tap on a link opens it as well', (await opened()).length === 2, JSON.stringify(await opened()));
+  await page.click('button[aria-label="Select text to highlight"]'); // back to the pen
+  await sleep(500);
+
+  await page.click('[data-testid="tool-highlighter"]');
+  await sleep(600);
+  await tap(site);
+  check('with the highlighter too, and it highlights nothing', (await opened()).length === 3 && (await madeSoFar(page)).marks === 0, `${(await opened()).length} opened, ${made(await madeSoFar(page))}`);
+  await page.click('[data-testid="tool-pen"]');
+  await sleep(500);
+
+  // ----- tools that use the tap themselves leave the links alone -----
+  await page.click('[data-testid="tool-eraser"]');
+  await sleep(300);
+  await tap(site);
+  check('with the eraser a tap does not open links', (await opened()).length === 3, JSON.stringify(await opened()));
+  await page.click('[data-testid="tool-eraser"]');
 
   check('no page errors', errors.length === 0, errors.join('\n'));
   await ctx.close();

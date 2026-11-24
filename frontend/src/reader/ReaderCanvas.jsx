@@ -30,7 +30,11 @@ import { bucketElements, signature, sceneFromRows, relayout } from './inkBuckets
 import { PdfRaster } from './pdfRaster';
 import { TextLayerManager } from './textLayers';
 import { drawPaper, drawMarks, DARK_FILTER, DESK } from './paper';
-import { newMark, mergeMarks, updateMark, deleteMark, hitMark, activeMarks } from './marks';
+import { newMark, mergeMarks, updateMark, deleteMark, hitMark, activeMarks, markChanges, restoreMarks } from './marks';
+import { History } from './history';
+import { LinkIndex, hitLink, destPageIndex } from './pdfLinks';
+import { openExternal } from '../lib/openExternal';
+import { snapshotScene, diffScene, applyInkChanges } from './inkDiff';
 import Toolbar from './Toolbar';
 import PageBar from './PageBar';
 import SelectionBar from './SelectionBar';
@@ -52,6 +56,7 @@ const PALM_WINDOW_MS = 500; // touches this soon after pen activity are a restin
 const PALM_SIZE = 60; // touch contact (CSS px) this big is a palm, not a fingertip
 const HIGHLIGHTER_OPACITY = 40;
 const TAP_MOVE_TOLERANCE = 10;
+const LINK_TAP_MS = 600; // a press on a link that lasts longer is a mark of the pen, not a tap
 const DOUBLE_TAP_MS = 350;
 const DOUBLE_TAP_DIST = 40;
 const TWO_FINGER_TAP_MS = 300;
@@ -135,6 +140,16 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   }
   const dirtyMarks = useRef(new Set());
 
+  // Undo / redo for everything done in this document, in one timeline (see history.js). The drawing is watched rather than
+  // asked: inkLastRef is the page-local copy of the scene as last seen, and each burst of drawing that differs from it is a step.
+  const historyRef = useRef(null);
+  if (historyRef.current === null) historyRef.current = new History();
+  const history = historyRef.current;
+  const inkLastRef = useRef(null);
+  const inkTimer = useRef(null);
+  const inkVersionRef = useRef(null);
+  const pendingMarks = useRef(null); // a run of edits to one mark (typing a note), recorded as one step when it pauses
+
   // ---------- UI state ----------
 
   const [activeToolType, setActiveToolType] = useState('freedraw');
@@ -162,6 +177,8 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const toolBeforeSnip = useRef(null);
   const lastCopy = useRef(null); // the last picture copied from a region (its pixel size and the region's), see pastedPictureSize
   const lastPointer = useRef(null); // where the pointer last was (client px), for pasting there
+  const linksRef = useRef(null); // LinkIndex: the clickable links of each page
+  const hoverLink = useRef(null); // { link, index }: the link under the mouse/pen, outlined as a hint
   const penHistory = useSettings((s) => s.penColorHistory);
   const hlHistory = useSettings((s) => s.hlColorHistory);
 
@@ -261,6 +278,8 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     const dpr = window.devicePixelRatio || 1;
 
     const visible = visiblePages(L, view, rect);
+    // Read the links of the pages on screen (once each), so that a tap on one is answered at once.
+    for (const i of visible) if (L.pages[i].kind === 'pdf') linksRef.current?.load(L.pages[i].pdfIndex);
     // Ask for bitmaps: the base of the visible pages and their neighbours at
     // once, the sharp detail only when the view has settled.
     if (raster) {
@@ -412,12 +431,17 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     const text = new TextLayerManager(textRootRef.current, pdf);
     text.onRendered = (i) => findRef.current?.onPageRendered(i);
     textRef.current = text;
+    const links = new LinkIndex(pdf);
+    linksRef.current = links;
+    hoverLink.current = null;
     scheduleSyncPaper();
     return () => {
       raster.dispose();
       text.dispose();
+      links.dispose();
       rasterRef.current = null;
       textRef.current = null;
+      linksRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdf]);
@@ -497,10 +521,23 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     layoutRef.previous = layout;
     const api = apiRef.current;
     if (api && prev) {
+      flushPending(prev); // the scene is still arranged in the old layout: compare it as that, or everything below the new page looks moved
       saveNow(prev); // anything unsaved is stored against the layout it was drawn in
-      const moved = relayout(prev, layout, api.getSceneElementsIncludingDeleted());
+      let moved = relayout(prev, layout, api.getSceneElementsIncludingDeleted());
+      // A page that is back (a deleted note page restored by undo) gets its ink back; relayout dropped it with the page.
+      const had = new Set(prev.pages.map((p) => p.key));
+      const rows = new Map();
+      for (const p of layout.pages) if (!had.has(p.key)) rows.set(p.key, inkRef.current.get(p.key)?.elements || []);
+      if ([...rows.values()].some((els) => els.length)) {
+        const present = new Set(moved.map((el) => el.id));
+        const back = sceneFromRows(layout, rows).filter((el) => !present.has(el.id));
+        if (back.length) moved = [...moved, ...back];
+      }
       api.updateScene({ elements: moved, captureUpdate: CaptureUpdateAction.NEVER });
-      api.history?.clear?.();
+      api.history?.clear?.(); // Excalidraw's own history is not used (history.js is), and its positions are stale now
+      // The new layout is the new "as last seen": the move is not a step.
+      inkLastRef.current = snapshotScene(layout, api.getSceneElementsIncludingDeleted());
+      inkVersionRef.current = getSceneVersion(api.getSceneElementsIncludingDeleted());
     }
     if (bookPageRef.current >= layout.n) bookPageRef.current = Math.max(0, layout.n - 1);
     requestAnimationFrame(() => {
@@ -592,22 +629,154 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   function handleExcalidrawChange(elements, appState) {
     const toolType = appState?.activeTool?.type;
     if (toolType && toolType !== activeToolType) setActiveToolType(toolType);
-    if (getSceneVersion(elements) !== savedVersion.current) scheduleSave();
+    const version = getSceneVersion(elements);
+    if (version !== savedVersion.current) scheduleSave();
+    // The first look at the scene, before anyone has touched it, is what everything is compared with later.
+    if (inkLastRef.current === null) {
+      inkLastRef.current = snapshotScene(layoutRef.current, elements);
+      inkVersionRef.current = version;
+    } else if (version !== inkVersionRef.current) {
+      inkVersionRef.current = version;
+      scheduleInkCommit();
+    }
   }
+
+  // ---------- undo / redo ----------
+
+  const INK_SETTLE_MS = 250; // quiet time after the last change to the drawing before it is taken as one step
+  const MARKS_COALESCE_MS = 700; // edits to one mark closer together than this are one step
+
+  // The drawing changed: take it as a step once it has settled (no pointer down, nothing being typed, dragged or resized).
+  function scheduleInkCommit() {
+    clearTimeout(inkTimer.current);
+    inkTimer.current = setTimeout(() => {
+      const st = apiRef.current?.getAppState();
+      const busy = st && (st.cursorButton === 'down' || st.newElement || st.editingTextElement || st.multiElement || st.selectedElementsAreBeingDragged || st.resizingElement || st.isResizing || st.isRotating);
+      if (busy || drawing.current || erasing.current) scheduleInkCommit();
+      else commitInkHistory();
+    }, INK_SETTLE_MS);
+  }
+
+  // Records what changed in the drawing since the last look, as one step.
+  // `L` is the layout the scene is arranged in: the current one, except while pages are being moved (see the relayout effect).
+  function commitInkHistory(L = layoutRef.current) {
+    clearTimeout(inkTimer.current);
+    finishMarksEdit();
+    const api = apiRef.current;
+    if (!api || readOnly) return;
+    const elements = api.getSceneElementsIncludingDeleted();
+    if (inkLastRef.current === null) {
+      inkLastRef.current = snapshotScene(L, elements);
+      return;
+    }
+    const { changes, next } = diffScene(L, elements, inkLastRef.current);
+    inkLastRef.current = next;
+    if (changes.length) history.record({ undo: () => applyInk(changes, 'undo'), redo: () => applyInk(changes, 'redo') });
+  }
+
+  // Puts a step's drawing back (or forward) — without it being a new step.
+  function applyInk(changes, dir) {
+    const api = apiRef.current;
+    if (!api) return;
+    const L = layoutRef.current;
+    const { elements } = applyInkChanges(L, api.getSceneElementsIncludingDeleted(), changes, dir);
+    api.updateScene({ elements, captureUpdate: CaptureUpdateAction.NEVER });
+    inkLastRef.current = snapshotScene(L, api.getSceneElementsIncludingDeleted());
+    inkVersionRef.current = getSceneVersion(api.getSceneElementsIncludingDeleted());
+    scheduleSave();
+  }
+
+  // Everything that is waiting to become a step, made one — before anything else is recorded, or undone.
+  function flushPending(L) {
+    finishMarksEdit();
+    commitInkHistory(L);
+  }
+
+  // A step for a change to the marks of one page. Undoing is "make these marks what they were, as of now" (see restoreMarks).
+  function recordMarksStep(pageKey, before, after) {
+    const { ids, before: was, after: now } = markChanges(before, after);
+    if (!ids.length) return;
+    const apply = (snapshot) => changeMarks(pageKey, restoreMarks(marksRef.current.get(pageKey) || [], ids, snapshot));
+    history.record({ undo: () => apply(was), redo: () => apply(now) });
+  }
+
+  // Changes to the marks — edits: [{ pageKey, next }] — as one step. With `coalesce` (typing a note) a run of edits to the
+  // same thing is one step, recorded once it pauses.
+  function editMarks(edits, { coalesce = null } = {}) {
+    if (coalesce) {
+      let run = pendingMarks.current;
+      if (!run || run.key !== coalesce) {
+        flushPending();
+        run = { key: coalesce, before: new Map(), timer: null };
+        pendingMarks.current = run;
+      }
+      clearTimeout(run.timer);
+      for (const { pageKey, next } of edits) {
+        if (!run.before.has(pageKey)) run.before.set(pageKey, marksRef.current.get(pageKey) || []);
+        changeMarks(pageKey, next);
+      }
+      run.timer = setTimeout(finishMarksEdit, MARKS_COALESCE_MS);
+      return;
+    }
+    flushPending();
+    history.batch(() => {
+      for (const { pageKey, next } of edits) {
+        const before = marksRef.current.get(pageKey) || [];
+        changeMarks(pageKey, next);
+        recordMarksStep(pageKey, before, next);
+      }
+    });
+  }
+
+  function finishMarksEdit() {
+    const run = pendingMarks.current;
+    if (!run) return;
+    pendingMarks.current = null;
+    clearTimeout(run.timer);
+    history.batch(() => {
+      for (const [pageKey, before] of run.before) recordMarksStep(pageKey, before, marksRef.current.get(pageKey) || []);
+    });
+  }
+
+  const undo = () => {
+    if (readOnly) return Promise.resolve(false);
+    flushPending();
+    return history.undo();
+  };
+  const redo = () => {
+    if (readOnly) return Promise.resolve(false);
+    flushPending();
+    return history.redo();
+  };
+  const undoRef = useRef({});
+  undoRef.current = { undo, redo };
+
+  // Ctrl/Cmd+Z, Ctrl+Shift+Z and Ctrl+Y: this timeline, not Excalidraw's (which only knows its drawing, and is cleared when the
+  // pages shift). Not while typing in a field — that has an undo of its own.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (prefsRef.current.readOnly || !e.key || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const k = e.key.toLowerCase();
+      const wantsUndo = k === 'z' && !e.shiftKey;
+      const wantsRedo = (k === 'z' && e.shiftKey) || k === 'y';
+      if (!wantsUndo && !wantsRedo) return;
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      if (document.querySelector('div[class*="z-[1100]"] [role=dialog]')) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (wantsUndo) undoRef.current.undo();
+      else undoRef.current.redo();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
 
   useEffect(() => {
     if (savedVersion.current === null) savedVersion.current = getSceneVersion(initial.elements);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function sendShortcut(key, shift = false) {
-    const target = containerRef.current?.querySelector('.excalidraw');
-    target?.dispatchEvent(
-      new KeyboardEvent('keydown', { key, code: `Key${key.toUpperCase()}`, ctrlKey: true, metaKey: true, shiftKey: shift, bubbles: true, cancelable: true })
-    );
-  }
-  const undo = () => sendShortcut('z');
-  const redo = () => sendShortcut('z', true);
 
   // ---------- tools ----------
 
@@ -682,10 +851,13 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   function markSelection(type, color, note) {
     const items = selBarRef.current?.items || textRef.current?.selection();
     if (!items) return;
-    for (const it of items) {
-      const mark = newMark({ type, color, rects: it.rects, text: it.text, note });
-      changeMarks(it.key, [...(marksRef.current.get(it.key) || []), mark]);
-    }
+    // A selection over several pages is still one highlight to undo.
+    editMarks(
+      items.map((it) => ({
+        pageKey: it.key,
+        next: [...(marksRef.current.get(it.key) || []), newMark({ type, color, rects: it.rects, text: it.text, note })],
+      }))
+    );
     clearTextSelection();
   }
 
@@ -742,6 +914,23 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         ctx.fillStyle = d.color;
         ctx.fill(path);
       }
+      ctx.restore();
+    }
+
+    // The link under the mouse or pen: a soft violet outline.
+    const hl = hoverLink.current;
+    const hv = hl && !d ? currentView() : null;
+    if (hv) {
+      const pr = pageRect(layoutRef.current, hl.index);
+      const [lx, ly, lw, lh] = hl.link.rect;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(124, 58, 237, 0.85)';
+      ctx.fillStyle = 'rgba(124, 58, 237, 0.10)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.rect((pr.x + lx + hv.scrollX) * hv.zoom - 1, (pr.y + ly + hv.scrollY) * hv.zoom - 1, lw * hv.zoom + 2, lh * hv.zoom + 2);
+      ctx.fill();
+      ctx.stroke();
       ctx.restore();
     }
 
@@ -853,6 +1042,8 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       holdAnchor: null,
       holdTimer: null,
       sheet,
+      // Where and when it began, and the link there: a stroke that is only a tap on a link opens the link instead.
+      tap: { x: e.clientX, y: e.clientY, at: performance.now(), hit: linksOn() ? linkAt(e.clientX, e.clientY, linkPad(e)) : null },
     };
     d.points.push(localPoint(e, rect, d));
     drawing.current = d;
@@ -912,6 +1103,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     const elements = d.highlighter ? [...added, ...existing] : [...existing, ...added];
     api.updateScene({ elements, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
     scheduleSave();
+    commitInkHistory(); // each stroke is a step of its own
   }
 
   function endStroke() {
@@ -967,7 +1159,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         .textUnderStroke(r.index, local)
         .then((found) => {
           if (found) {
-            changeMarks(r.key, [...(marksRef.current.get(r.key) || []), newMark({ type: 'hl', color: d.color, rects: found.rects, text: found.text })]);
+            editMarks([{ pageKey: r.key, next: [...(marksRef.current.get(r.key) || []), newMark({ type: 'hl', color: d.color, rects: found.rects, text: found.text })] }]);
             try {
               navigator.vibrate?.(8);
             } catch {
@@ -1039,18 +1231,25 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     scheduleOverlay();
     const api = apiRef.current;
     if (!api || !er) return;
-    if (er.pending.size) {
-      const elements = api.getSceneElementsIncludingDeleted().map((el) => (er.pending.has(el.id) ? newElementWith(el, { isDeleted: true }) : el));
-      api.updateScene({ elements, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
-      scheduleSave();
-    }
-    const byPage = new Map();
-    for (const [id, key] of er.marks) byPage.set(key, [...(byPage.get(key) || []), id]);
-    for (const [key, ids] of byPage) {
-      let next = marksRef.current.get(key) || [];
-      for (const id of ids) next = deleteMark(next, id);
-      changeMarks(key, next);
-    }
+    flushPending();
+    // The strokes and the highlights one swipe of the eraser removed come back together: one step.
+    history.batch(() => {
+      if (er.pending.size) {
+        const elements = api.getSceneElementsIncludingDeleted().map((el) => (er.pending.has(el.id) ? newElementWith(el, { isDeleted: true }) : el));
+        api.updateScene({ elements, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
+        scheduleSave();
+        commitInkHistory();
+      }
+      const byPage = new Map();
+      for (const [id, key] of er.marks) byPage.set(key, [...(byPage.get(key) || []), id]);
+      const edits = [];
+      for (const [key, ids] of byPage) {
+        let next = marksRef.current.get(key) || [];
+        for (const id of ids) next = deleteMark(next, id);
+        edits.push({ pageKey: key, next });
+      }
+      if (edits.length) editMarks(edits);
+    });
   }
 
   // Fades the strokes an erase gesture has touched so far.
@@ -1115,6 +1314,91 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     if (next < 0 || next >= layoutRef.current.n) return false;
     goToPage(next);
     return true;
+  }
+
+  // ---------- links inside the PDF ----------
+  //
+  // A plain tap (no drag, no hold) on a link of the page opens it, whatever pen is in hand: the stroke that the tap would have
+  // started is dropped. Only where a tap has no other meaning — with the pen, highlighter or text tools, or in a shared link —
+  // not while shapes, the eraser, selection or snip are in use.
+
+  function linksOn() {
+    const p = prefsRef.current;
+    if (snipOnRef.current || selectionToolRef.current || erasing.current) return false;
+    return isDrawToolRef.current || textModeRef.current || !!p.readOnly;
+  }
+
+  // The link under a screen point: { link, index } (index = its page in the layout), or null. Only pages whose links were read.
+  function linkAt(clientX, clientY, pad = 2) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    const v = currentView();
+    const links = linksRef.current;
+    if (!rect || !v || !links) return null;
+    const L = layoutRef.current;
+    const x = (clientX - rect.left) / v.zoom - v.scrollX;
+    const y = (clientY - rect.top) / v.zoom - v.scrollY;
+    const index = pageUnder(L, x, y);
+    if (index < 0 || L.pages[index].kind !== 'pdf') return null;
+    if (modeRef.current === 'book' && index !== bookPageRef.current) return null; // only one page is shown there
+    const r = pageRect(L, index);
+    const link = hitLink(links.peek(L.pages[index].pdfIndex), x - r.x, y - r.y, pad / v.zoom);
+    return link ? { link, index } : null;
+  }
+
+  const linkPad = (e) => (e.pointerType === 'touch' ? 6 : 2);
+
+  // Opens what a link leads to: a web address outside the reader, or another page — with a way back.
+  function openLink(link) {
+    const target = link.target;
+    if (target.type === 'url') {
+      openExternal(target.url);
+      return;
+    }
+    const from = modeRef.current === 'book' ? bookPageRef.current : currentIndexRef.current;
+    const backView = currentView();
+    const go = (index) => {
+      if (index < 0 || index >= layoutRef.current.n || index === from) return;
+      goToPage(index);
+      toast(t('link.jumped', { n: index + 1 }), {
+        action: {
+          label: t('link.back'),
+          onClick: () => {
+            stopInitialView();
+            if (modeRef.current === 'book' || !backView) goToPage(from);
+            else applyView(backView);
+          },
+        },
+      });
+    };
+    if (target.type === 'action') {
+      const n = layoutRef.current.n;
+      go({ NextPage: from + 1, PrevPage: from - 1, FirstPage: 0, LastPage: n - 1 }[target.name] ?? -1);
+      return;
+    }
+    destPageIndex(pdf, target.dest).then((pdfIndex) => go(layoutRef.current.pages.findIndex((p) => p.kind === 'pdf' && p.pdfIndex === pdfIndex)));
+  }
+
+  // A tap at a pointer event's position: opens the link there, if there is one. True when it did.
+  function tapLink(e) {
+    if (!linksOn()) return false;
+    const hit = linkAt(e.clientX, e.clientY, linkPad(e));
+    if (!hit) return false;
+    openLink(hit.link);
+    return true;
+  }
+
+  function clearLinkHover() {
+    if (!hoverLink.current) return;
+    hoverLink.current = null;
+    scheduleOverlay();
+  }
+
+  // The mouse or pen hovering over a link outlines it (so that it can be told from the text around it).
+  function updateLinkHover(e) {
+    const hit = e.pointerType !== 'touch' && e.buttons === 0 && linksOn() ? linkAt(e.clientX, e.clientY) : null;
+    if ((hit?.link || null) === (hoverLink.current?.link || null)) return;
+    hoverLink.current = hit;
+    scheduleOverlay();
   }
 
   // ---------- find in text (Ctrl+F) ----------
@@ -1293,6 +1577,11 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       lastTap.current = null;
       return;
     }
+    // A finger on a link opens it (before the page-turning edge, and not as half of a double-tap).
+    if (e.type !== 'pointercancel' && tapLink(e)) {
+      lastTap.current = null;
+      return;
+    }
     // Book mode: tapping the outer edge turns the page.
     if (modeRef.current === 'book' && e.pointerType === 'touch' && prefsRef.current.pageTurn !== 'swipe') {
       const rect = containerRef.current.getBoundingClientRect();
@@ -1343,6 +1632,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     if (!onSurface && !(textModeRef.current && onText)) return;
     stopInertia();
     stopInitialView();
+    clearLinkHover();
 
     if (textModeRef.current) {
       // A second finger starts a pinch even over the text; one pointer is the text layer's.
@@ -1478,6 +1768,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   function handlePointerMoveCapture(e) {
     if (e.pointerType === 'pen') lastPenActivity.current = Date.now();
     lastPointer.current = { x: e.clientX, y: e.clientY };
+    updateLinkHover(e);
     if (ignoredTouches.current.has(e.pointerId)) {
       consume(e);
       return;
@@ -1568,8 +1859,13 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     }
     if (drawing.current && e.pointerId === drawing.current.pointerId) {
       consume(e);
+      const tap = drawing.current.tap;
+      const isTap = !!tap?.hit && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) <= TAP_MOVE_TOLERANCE && performance.now() - tap.at < LINK_TAP_MS;
       if (e.type === 'pointercancel') cancelStroke();
-      else endStroke();
+      else if (isTap) {
+        cancelStroke(); // not a mark of the pen: a tap on a link
+        openLink(tap.hit.link);
+      } else endStroke();
       if (e.pointerType === 'touch') {
         touchPoints.current.delete(e.pointerId);
         touchTrack.current = null;
@@ -1585,6 +1881,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     if (pan0 && pan0.pointerId === e.pointerId && pan0.pointerType !== 'touch') {
       touchPan.current = null;
       consume(e);
+      if (e.type !== 'pointercancel' && Math.hypot(e.clientX - pan0.startX, e.clientY - pan0.startY) <= TAP_MOVE_TOLERANCE) tapLink(e); // a shared link: a tap opens a link
       return;
     }
     if (!touchPoints.current.has(e.pointerId)) {
@@ -1661,6 +1958,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       const key = L.pages[i].key;
       const mark = hitMark(marksRef.current.get(key), x - r.x, y - r.y, 3);
       setMarkPop(mark ? { pageKey: key, mark, anchor: { x: e.clientX, y: e.clientY } } : null);
+      if (!mark) tapLink(e); // a link on plain text opens (a highlight on it is opened first: it can be edited)
     }, 30);
   }
 
@@ -1670,6 +1968,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const wheelTimer = useRef(null);
   function handleWheelCapture(e) {
     stopInitialView();
+    clearLinkHover();
     if (modeRef.current !== 'book' || e.ctrlKey || e.metaKey) return;
     const v = currentView();
     if (!v) return;
@@ -2196,8 +2495,10 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
       finalElements = newElements.map((el) => (selectedElementIds[el.id] ? newElementWith(el, { groupIds: [...el.groupIds, groupId] }) : el));
       appStatePatch.selectedGroupIds = { [groupId]: true };
     }
+    flushPending();
     api.updateScene({ elements: finalElements, appState: appStatePatch, captureUpdate: CaptureUpdateAction.IMMEDIATELY });
     scheduleSave();
+    commitInkHistory(); // the cut is one step
     // Hand straight over to plain select, so the next drag moves the cut.
     setSelectionTool(null);
   }
@@ -2226,10 +2527,14 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         remote.set(key, row.ink?.elements || []);
         Object.assign(files, row.ink?.files || {});
       }
+      flushPending(); // what the person has just drawn is theirs: a step, before the other device's work comes in
       const incoming = sceneFromRows(L, remote);
       if (Object.keys(files).length) api.addFiles(Object.values(files));
       const merged = reconcileElements(api.getSceneElementsIncludingDeleted(), incoming, api.getAppState());
       api.updateScene({ elements: merged, captureUpdate: CaptureUpdateAction.NEVER });
+      // ...and what came in is nobody's step to undo
+      inkLastRef.current = snapshotScene(L, api.getSceneElementsIncludingDeleted());
+      inkVersionRef.current = getSceneVersion(api.getSceneElementsIncludingDeleted());
       for (const [key, row] of rows) {
         sigRef.current.set(key, signature(row.ink?.elements || []));
         inkRef.current.set(key, row.ink || { elements: [], files: {} });
@@ -2244,11 +2549,16 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     },
     // Highlights panel: edit / delete / reveal a mark.
     updateMark(pageKey, id, patch) {
-      changeMarks(pageKey, updateMark(marksRef.current.get(pageKey) || [], id, patch));
+      editMarks([{ pageKey, next: updateMark(marksRef.current.get(pageKey) || [], id, patch) }], { coalesce: `edit:${id}` });
     },
     removeMark(pageKey, id) {
-      changeMarks(pageKey, deleteMark(marksRef.current.get(pageKey) || [], id));
+      editMarks([{ pageKey, next: deleteMark(marksRef.current.get(pageKey) || [], id) }]);
       setMarkPop(null);
+    },
+    // Something done outside the canvas (a note page inserted, a bookmark added) that undo should take back: { undo, redo }.
+    recordOp(op) {
+      flushPending();
+      history.record(op);
     },
     revealMark(pageKey, mark) {
       const L = layoutRef.current;
@@ -2281,6 +2591,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
         onPointerDownCapture={handlePointerDownCapture}
         onPointerMoveCapture={handlePointerMoveCapture}
         onPointerUpCapture={handlePointerUpCapture}
+        onPointerLeave={clearLinkHover}
         onPointerCancelCapture={handlePointerUpCapture}
         onWheelCapture={handleWheelCapture}
         onLostPointerCapture={(e) => {
@@ -2403,14 +2714,18 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
             readOnly={readOnly}
             onChange={(patch) => {
               const next = updateMark(marksRef.current.get(markPop.pageKey) || [], markPop.mark.id, patch);
-              changeMarks(markPop.pageKey, next);
+              // typing a note is one step, not one per letter
+              editMarks([{ pageKey: markPop.pageKey, next }], { coalesce: `edit:${markPop.mark.id}` });
               setMarkPop((p) => (p ? { ...p, mark: next.find((m) => m.id === p.mark.id) || p.mark } : p));
             }}
             onDelete={() => {
-              changeMarks(markPop.pageKey, deleteMark(marksRef.current.get(markPop.pageKey) || [], markPop.mark.id));
+              editMarks([{ pageKey: markPop.pageKey, next: deleteMark(marksRef.current.get(markPop.pageKey) || [], markPop.mark.id) }]);
               setMarkPop(null);
             }}
-            onClose={() => setMarkPop(null)}
+            onClose={() => {
+              finishMarksEdit();
+              setMarkPop(null);
+            }}
           />
         )}
 

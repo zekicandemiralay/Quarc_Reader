@@ -66,6 +66,9 @@ opens, where you left off.
   counter ("3 of 17") fills in as the document is searched. Capital letters never matter, and accents don't either unless you
   switch **á** on ("cay" then no longer finds "çay"). A scanned PDF has no text to search. In a document that lives only on
   your server, searching reads all of it once.
+- **Links in the PDF:** tap a web link (or an email address) to open it, or a link inside the document (a table of contents, a
+  footnote, "see page 12") to jump there — a **Back** button appears to return to where you were. A short tap is enough, whichever
+  pen is in your hand; dragging the pen over a link still writes. Hover over a link with the mouse or pen and it is outlined.
 - Your place is remembered, and follows you to your other devices for synced documents.
 - **Bookmark** this page with the ribbon icon; the list icon shows your bookmarks, highlights and notes.
 - Tap the corner button in the page counter to hide the toolbars while you read.
@@ -73,7 +76,8 @@ opens, where you left off.
 ## Writing and highlighting
 
 The floating dock at the top of the page has **Pen**, **Highlighter**, **Eraser**, **Select text** and **Snip**, with colours and
-sizes, undo/redo and the **Finger** switch. The **Tools** button next to it opens everything else (shapes, arrows, text,
+sizes, **undo/redo** (Ctrl+Z / Ctrl+Y — they take back *everything*: strokes, text highlights, notes, bookmarks and inserted or
+deleted note pages) and the **Finger** switch. The **Tools** button next to it opens everything else (shapes, arrows, text,
 image…) plus the **cut selection** tools; the slider icon has **Snap shapes** and **Snap to text**. The bar at the bottom turns
 pages, jumps to any page (tap the counter) and zooms.
 

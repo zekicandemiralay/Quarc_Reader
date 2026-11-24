@@ -79,6 +79,39 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   own message, the technical detail shown under it and `console.error`ed. A damaged *local* copy of a synced document is dropped
   automatically and the server's copy is opened; `cacheOffline` keeps a download only when its size (and, up to 150 MB, its
   SHA-256) matches the document's, so a cut-short download or an error page can never be stored as "the file".
+- **Undo / redo is one timeline for everything** (`reader/history.js`, `inkDiff.js`, `marks.js` `markChanges`/`restoreMarks`; wired in
+  `ReaderCanvas`: `editMarks`, `commitInkHistory`, `recordOp`). Ctrl/Cmd+Z, Ctrl+Shift+Z, Ctrl+Y (a window-capture `keydown`, skipped in
+  text fields and dialogs), the dock buttons and the two-finger tap all go through it. **Excalidraw's own history is not used**: it only
+  knows its drawing, has no hook for the host, and `relayout` has to clear it whenever a note page is inserted or deleted. A step is a
+  `{undo(), redo()}` pair of closures (may be async; `History` runs them one after the other; one that throws is dropped).
+  Where the steps come from: (1) **ink** — the scene is *watched*, not hooked: 250 ms after the last change (not while a pointer is down
+  or an element is being dragged/edited) `diffScene` compares it with `inkLastRef` and the elements that differ are one step. Steps are
+  kept **page-locally**, so one recorded before a note page was inserted above it still lands on its page; undo/redo are *forward*
+  writes (version above anything seen; undoing a creation = a tombstone), so they sync like drawing does. Something that never lived
+  (the pencil stroke that snapped to text) is not a step. `commitInkHistory(L)` takes the layout the **scene** is arranged in — the
+  relayout effect passes `prev` (`layoutRef.current` is already the new one during that effect), otherwise everything below an inserted
+  page looks "moved" and records a phantom step. Every place that rewrites the scene wholesale (`applyInk`, `applyRemote`, relayout)
+  must re-baseline `inkLastRef` or its own change becomes a step. (2) **marks** (text highlights, underlines, notes, snap-to-text) — all
+  changes go through `editMarks(edits, {coalesce})`; undo is `restoreMarks` = "make these marks what they were, *as of now*" (fresh `u`,
+  an absent-before mark becomes a tombstone), never "put the old list back", because the merge keeps the newer `u`. Typing a note is one
+  step (coalesced; recorded after a 700 ms pause, on close, or before the next action). (3) **document-level** things — note page
+  inserted/deleted, bookmark toggled — are recorded by `Reader.jsx` with `canvasRef.current.recordOp({undo, redo})`; the closures re-read
+  the doc from Dexie and tombstone/restore by id (`setNoteDeleted`, `setBookmarkDeleted`); a restored note page gets its ink back from
+  `inkRef` in the relayout effect. (4) `history.batch(fn)` makes several records one step — the stylus eraser removes strokes *and*
+  highlights in one swipe. Not undoable: reading position, settings, sync mode, Replace in library. The shared (read-only) view has none.
+- **Links inside the PDF** (`reader/pdfLinks.js` pure + `LinkIndex`, `lib/openExternal.js`; wired in `ReaderCanvas`: `linksOn`, `linkAt`,
+  `openLink`, `tapLink`, `updateLinkHover`): the page is canvas-drawn, so a link only works because we ask pdf.js for the page's
+  `getAnnotations()` (once per page, for the pages on screen, from `syncPaper`; `LinkIndex.peek` answers synchronously so a tap never
+  waits). Only `Link` annotations the reader can follow count: http/https/mailto (`safeUrl` — never `javascript:`/`file:`/`data:`),
+  a destination (named or explicit; `destPageIndex` → layout page), or NextPage/PrevPage/FirstPage/LastPage; others are not links at
+  all (so the pen draws on them). A **plain tap** opens one — `startStroke` remembers the link under the pointer-down in `d.tap` and the
+  pointer-up drops the stroke (`cancelStroke`) when it moved ≤ `TAP_MOVE_TOLERANCE` within `LINK_TAP_MS`; a drag over the same words
+  still draws. Same for a finger that scrolls (`handleTap`, before the book-mode edge turn), a shared link (read-only pan), and the
+  text mode (`handleTextTap`, a highlight under the tap is opened first). Not with shapes/eraser/selection/snip (`linksOn`). Web links:
+  Tauri `shell.open` or `window.open(_blank, noopener)`; an internal jump goes through `goToPage` and shows a toast with **Back**
+  (restores the exact view in scroll mode). Mouse/pen hover outlines the link on the overlay canvas. Not done: the destination's
+  scroll position inside the page (the page top is used), links in note pages (they have none), outline/bookmark panel. Android
+  `window.open` and the Tauri `shell.open` path were not run on a device.
 - **Dock: eraser and colours** (`reader/Toolbar.jsx`, `ColorPanel.jsx`, `ColorPicker.jsx`, `lib/color.js`): the eraser is a dock
   button (Excalidraw's own eraser tool; pressing it again goes back to the pen/highlighter in `settings.tool`) and is not in the
   Tools flyout any more. The preset swatches stay inline in the dock (tests click `button[aria-label="#e03131"]`); the last circle
@@ -172,9 +205,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 153 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 184 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools library big   (284 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links library big   (336 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 

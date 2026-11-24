@@ -8,7 +8,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { randomBytes } from 'node:crypto';
-import { PDFDocument, PDFName, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, StandardFonts, rgb } from 'pdf-lib';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(here, '..');
@@ -113,7 +113,8 @@ export const PDF_LINES = [
   'and see the watery part of the world.',
 ];
 
-export async function makeTestPdf({ pages = 3, title = 'Moby Dick (test)', author = 'H. Melville', junkBytes = 0 } = {}) {
+// `links: true` puts three clickable lines on page 1: a web address, a jump to page 3, and a script (which must not work).
+export async function makeTestPdf({ pages = 3, title = 'Moby Dick (test)', author = 'H. Melville', junkBytes = 0, links = false } = {}) {
   const doc = await PDFDocument.create();
   doc.setTitle(title);
   doc.setAuthor(author);
@@ -124,6 +125,20 @@ export async function makeTestPdf({ pages = 3, title = 'Moby Dick (test)', autho
     page.drawText(`Chapter ${p + 1}`, { x: 72, y: 760, size: 28, font: bold, color: rgb(0.1, 0.1, 0.1) });
     PDF_LINES.forEach((line, i) => page.drawText(line, { x: 72, y: 700 - i * 22, size: 13, font, color: rgb(0, 0, 0) }));
     page.drawText(`— page ${p + 1} of ${pages} —`, { x: 230, y: 40, size: 10, font, color: rgb(0.4, 0.4, 0.4) });
+  }
+  if (links) {
+    const ctx = doc.context;
+    const first = doc.getPage(0);
+    const annots = [];
+    const addLink = (text, y, action) => {
+      first.drawText(text, { x: 72, y, size: 13, font, color: rgb(0.1, 0.2, 0.8) });
+      const w = font.widthOfTextAtSize(text, 13);
+      annots.push(ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Link', Rect: [72, y - 3, 72 + w, y + 13], Border: [0, 0, 0], ...action })));
+    };
+    addLink('Open the Quarc site', 600, { A: ctx.obj({ S: 'URI', URI: PDFString.of('https://example.com/quarc') }) });
+    addLink('Jump to chapter 3', 560, { Dest: [doc.getPage(2).ref, 'XYZ', 0, 842, null] });
+    addLink('Run a script', 520, { A: ctx.obj({ S: 'URI', URI: PDFString.of('javascript:alert(1)') }) });
+    first.node.set(PDFName.of('Annots'), ctx.obj(annots));
   }
   // Ballast that no page refers to: makes the file big enough that a reader must stream it in ranges.
   if (junkBytes) doc.catalog.set(PDFName.of('QuarcBallast'), doc.context.register(doc.context.stream(randomBytes(junkBytes))));

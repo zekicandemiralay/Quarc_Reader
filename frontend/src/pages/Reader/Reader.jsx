@@ -235,8 +235,40 @@ function Reader({ id }) {
     const at = items.findIndex((it) => (it.t === 'p' ? `p${it.i}` : `n${it.id}`) === here?.key);
     items.splice(at + 1, 0, note);
     await updateDoc(id, { layout: items });
+    // Undo takes the page away again (as a tombstone, so the removal syncs); redo brings it back.
+    canvasRef.current?.recordOp({ undo: () => setNoteDeleted(note.id, true), redo: () => setNoteDeleted(note.id, false) });
     setMenu(null);
     requestAnimationFrame(() => canvasRef.current?.goToPage(index + 1));
+  }
+
+  // Marks one inserted page as deleted (or alive again), read fresh from the database because the step may be undone or
+  // redone long after the page list in memory has moved on. The change is newer than any copy on another device.
+  async function setNoteDeleted(noteId, deleted) {
+    const fresh = await db.docs.get(id);
+    if (!fresh) return;
+    let touched = false;
+    const layout = (fresh.layout || []).map((it) => {
+      if (it.t !== 'n' || it.id !== noteId || !!it.del === deleted) return it;
+      touched = true;
+      const { del, ...rest } = it; // eslint-disable-line no-unused-vars
+      const u = Math.max(Date.now(), (it.u || 0) + 1);
+      return deleted ? { ...rest, del: true, u } : { ...rest, u };
+    });
+    if (touched) await updateDoc(id, { layout });
+  }
+
+  async function setBookmarkDeleted(bookmarkId, deleted) {
+    const fresh = await db.docs.get(id);
+    if (!fresh) return;
+    let touched = false;
+    const bookmarks = (fresh.bookmarks || []).map((b) => {
+      if (b.id !== bookmarkId || !!b.del === deleted) return b;
+      touched = true;
+      const { del, ...rest } = b; // eslint-disable-line no-unused-vars
+      const u = Math.max(Date.now(), (b.u || 0) + 1);
+      return deleted ? { ...rest, del: true, u } : { ...rest, u };
+    });
+    if (touched) await updateDoc(id, { bookmarks });
   }
 
   async function deleteNotePage() {
@@ -244,8 +276,11 @@ function Reader({ id }) {
     const here = pages[index];
     if (here?.kind !== 'note') return;
     if (!window.confirm(t('reader.deleteNotePageConfirm'))) return;
-    const items = currentItems().map((it) => (it.t === 'n' && it.id === here.id ? { ...it, del: true, u: Date.now() } : it));
+    const noteId = here.id;
+    const items = currentItems().map((it) => (it.t === 'n' && it.id === noteId ? { ...it, del: true, u: Date.now() } : it));
     await updateDoc(id, { layout: items });
+    // Undo brings the page back, with whatever was written on it.
+    canvasRef.current?.recordOp({ undo: () => setNoteDeleted(noteId, false), redo: () => setNoteDeleted(noteId, true) });
     setMenu(null);
   }
 
@@ -259,11 +294,13 @@ function Reader({ id }) {
     if (!hereKey) return;
     const list = doc.bookmarks || [];
     const u = Date.now();
-    const next = hereBookmark
-      ? list.map((b) => (b.id === hereBookmark.id ? { ...b, del: true, u } : b))
-      : [...list, { id: crypto.randomUUID(), u, page_key: hereKey, label: t('reader.pageN', { n: currentIndex + 1 }) }];
+    const removing = hereBookmark;
+    const added = removing ? null : { id: crypto.randomUUID(), u, page_key: hereKey, label: t('reader.pageN', { n: currentIndex + 1 }) };
+    const next = removing ? list.map((b) => (b.id === removing.id ? { ...b, del: true, u } : b)) : [...list, added];
     await updateDoc(id, { bookmarks: next });
-    toast(hereBookmark ? t('reader.bookmarkRemoved') : t('reader.bookmarkAdded'));
+    const bookmarkId = removing ? removing.id : added.id;
+    canvasRef.current?.recordOp({ undo: () => setBookmarkDeleted(bookmarkId, !removing), redo: () => setBookmarkDeleted(bookmarkId, !!removing) });
+    toast(removing ? t('reader.bookmarkRemoved') : t('reader.bookmarkAdded'));
   }
 
   function openBookmark(b) {

@@ -292,6 +292,10 @@
     "copyFallback": "Resim kopyalama burada kullanılamıyor: bunun yerine paylaşım ekranı açıldı.",
     "failed": "Görüntü oluşturulamadı."
   },
+  "link": {
+    "jumped": "Sayfa {{n}}",
+    "back": "Geri"
+  },
   "find": {
     "title": "Belgede bul",
     "placeholder": "Belgede bul",

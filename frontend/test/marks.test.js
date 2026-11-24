@@ -1,7 +1,7 @@
 // Run: npm test (from frontend/)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { newMark, activeMarks, mergeMarks, updateMark, deleteMark, mergeLineRects, hitMark, pointInRects, markBounds } from '../src/reader/marks.js';
+import { newMark, activeMarks, mergeMarks, updateMark, deleteMark, mergeLineRects, hitMark, pointInRects, markBounds, markChanges, restoreMarks } from '../src/reader/marks.js';
 
 const r = (x, y, w, h) => ({ x, y, w, h });
 
@@ -52,4 +52,68 @@ test('hit-testing finds the topmost live mark under a point', () => {
   assert.equal(hitMark([lower, upper, dead], 400, 400), null);
   assert.equal(pointInRects([[0, 0, 10, 10]], 11, 5, 2), true);
   assert.deepEqual(markBounds({ rects: [[10, 10, 20, 5], [5, 30, 40, 5]] }), { x: 5, y: 10, w: 40, h: 25 });
+});
+
+// ----- undo ---------------------------------------------------------------------------
+
+const hl = (id, extra = {}) => ({ id, u: 100, type: 'hl', color: '#ffd43b', rects: [[0, 0, 10, 10]], text: id, ...extra });
+
+test('marks that differ between two lists are found, timestamps ignored', () => {
+  const a = hl('a');
+  const b = hl('b');
+  assert.deepEqual(markChanges([a], [a, b]).ids, ['b']); // created
+  assert.deepEqual(markChanges([a, b], [a]).ids, ['b']); // vanished
+  assert.deepEqual(markChanges([a, b], [a, { ...b, u: 500 }]).ids, [], 'only the timestamp moved');
+  assert.deepEqual(markChanges([a, b], [a, { ...b, note: 'hi' }]).ids, ['b']); // edited
+  assert.deepEqual(markChanges([a, b], [a, deleteMark([b], 'b')[0]]).ids, ['b']); // deleted
+  assert.deepEqual(markChanges(undefined, undefined).ids, []);
+});
+
+test('undoing a created mark deletes it as a tombstone newer than the mark, redo brings it back', () => {
+  const a = hl('a');
+  const after = [a];
+  const { ids, before, after: snapAfter } = markChanges([], after);
+  const undone = restoreMarks(after, ids, before, 1000);
+  assert.equal(undone.length, 1, 'kept as a tombstone, so the deletion reaches other devices');
+  assert.equal(undone[0].del, true);
+  assert.ok(undone[0].u > a.u);
+  const redone = restoreMarks(undone, ids, snapAfter, 2000);
+  assert.equal(redone[0].del, undefined);
+  assert.ok(redone[0].u > undone[0].u, 'newer than the tombstone: it wins the merge');
+  assert.equal(activeMarks(redone).length, 1);
+});
+
+test('undoing an edit puts the old words back, undoing a delete brings the mark back', () => {
+  const a = hl('a', { note: 'first' });
+  const edited = [{ ...a, note: 'second', u: 200 }];
+  const e = markChanges([a], edited);
+  const undoneEdit = restoreMarks(edited, e.ids, e.before, 1000);
+  assert.equal(undoneEdit[0].note, 'first');
+  assert.ok(undoneEdit[0].u > 200);
+
+  const deleted = deleteMark([a], 'a');
+  const d = markChanges([a], deleted);
+  const undoneDelete = restoreMarks(deleted, d.ids, d.before, 1000);
+  assert.equal(undoneDelete[0].del, undefined);
+  assert.equal(activeMarks(undoneDelete).length, 1);
+});
+
+test('an undo touches only the marks of its step', () => {
+  const a = hl('a');
+  const b = hl('b');
+  const c = hl('c', { u: 300 });
+  const { ids, before } = markChanges([a], [a, b]);
+  const out = restoreMarks([a, b, c], ids, before, 1000);
+  assert.equal(out.find((m) => m.id === 'a').u, 100, 'untouched');
+  assert.equal(out.find((m) => m.id === 'c').u, 300, 'a mark added since is left alone');
+  assert.equal(out.find((m) => m.id === 'b').del, true);
+});
+
+test('the merge keeps an undone mark undone: the tombstone beats the older live copy', () => {
+  const a = hl('a');
+  const { ids, before } = markChanges([], [a]);
+  const tomb = restoreMarks([a], ids, before, 5000);
+  // another device still has the live mark (u 100) and merges the tombstone in
+  const merged = mergeMarks([a], tomb, 6000);
+  assert.equal(activeMarks(merged).length, 0);
 });
