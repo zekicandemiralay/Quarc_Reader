@@ -33,7 +33,7 @@ import { drawPaper, drawMarks, DARK_FILTER, DESK } from './paper';
 import { newMark, mergeMarks, updateMark, deleteMark, hitMark, activeMarks, markChanges, restoreMarks } from './marks';
 import { History } from './history';
 import { LinkIndex, hitLink, destPageIndex } from './pdfLinks';
-import { startToolFor, isMouseDevice, finePointerNow } from '../lib/device';
+import { startToolFor, isMouseDevice, touchPrimaryNow } from '../lib/device';
 import { getPlatform } from '../lib/updateCheck';
 import { openExternal } from '../lib/openExternal';
 import { snapshotScene, diffScene, applyInkChanges } from './inkDiff';
@@ -157,9 +157,9 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 
   // What a document opens with: on a computer the HAND (a drag with the mouse moves the page; the pen is pressed to write with
   // the mouse), on a touch screen the pen. The setting `startTool` can force either. Read once, when the document opens.
-  const [device] = useState(() => ({ platform: getPlatform(), fine: finePointerNow() }));
-  const mouseDevice = isMouseDevice(device.platform, device.fine);
-  const [startTool] = useState(() => startToolFor({ setting: useSettings.getState().startTool, platform: device.platform, finePointer: device.fine }));
+  const [device] = useState(() => ({ platform: getPlatform(), touch: touchPrimaryNow() }));
+  const mouseDevice = isMouseDevice(device.platform, device.touch);
+  const [startTool] = useState(() => startToolFor({ setting: useSettings.getState().startTool, platform: device.platform, touch: device.touch }));
   const [activeToolType, setActiveToolType] = useState(startTool);
   const [textMode, setTextMode] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);

@@ -107,7 +107,8 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   highlights in one swipe. Not undoable: reading position, settings, sync mode, Replace in library. The shared (read-only) view has none.
 - **What a document opens with: the hand on a computer, the pen on a touch screen** (`lib/device.js` `startToolFor`, setting `startTool`
   `'auto'` | `'pen'` | `'hand'`, Settings → Handwriting). Auto = the desktop app, or a browser whose primary pointer is fine
-  (`matchMedia('(pointer: fine)')`, not Android) → the Excalidraw `hand` tool; touch screens and the Android app → `freedraw` as always.
+  (not Android, and the primary pointer is not a finger: `!matchMedia('(pointer: coarse)')` — NOT `(pointer: fine)`: headless Chrome on the CI runner reports
+  no pointer at all and would have been taken for a touch screen) → the Excalidraw `hand` tool; touch screens and the Android app → `freedraw` as always.
   `ReaderCanvas` reads it once (`startTool`) and has `readingRef` = `activeToolType === 'hand' && !textMode`: in that state
   `handlePointerDownCapture` treats the mouse, a stylus and a finger like the read-only shared view (`beginPan`: a drag moves the page —
   finger with inertia and the book-mode swipe — and a tap opens a link or double-taps to fit) instead of starting a stroke; the

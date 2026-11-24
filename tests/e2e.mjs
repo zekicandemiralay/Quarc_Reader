@@ -2716,7 +2716,7 @@ async function scenarioHand(browser, state) {
   await touch.evaluateOnNewDocument(() => localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 3, readMode: 'scroll', paperMode: 'white' })));
   try {
     await touch.goto(BASE, { waitUntil: 'networkidle0' });
-    const coarse = await touch.evaluate(() => matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches);
+    const coarse = await touch.evaluate(() => matchMedia('(pointer: coarse)').matches);
     if (!coarse) {
       console.log('  (this browser does not emulate a coarse pointer: the touch-screen check is covered by the unit tests only)');
     } else {
