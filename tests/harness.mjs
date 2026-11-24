@@ -157,6 +157,12 @@ const results = [];
 export function check(name, ok, detail = '') {
   results.push({ name, ok: !!ok, detail });
   console.log(`${ok ? '  ✓' : '  ✗'} ${name}${!ok && detail ? `\n      ${detail}` : ''}`);
+  // On GitHub Actions a failed check also becomes an annotation of the run: readable on the run's page (and through the
+  // public API) without opening the log. (Workflow commands need %, CR and LF escaped.)
+  if (!ok && process.env.GITHUB_ACTIONS === 'true') {
+    const text = `${name}${detail ? ` — ${detail}` : ''}`.slice(0, 900).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+    console.log(`::error title=Browser test failed::${text}`);
+  }
   return !!ok;
 }
 export function section(title) {

@@ -67,7 +67,13 @@ async function main() {
     ];
     for (const [name, fn] of scenarios) {
       if (only && only !== name) continue;
-      await fn(browser, state);
+      try {
+        await fn(browser, state);
+      } catch (err) {
+        // One scenario that throws (a timeout, a missing element) must not hide the others: it counts as a failed check.
+        console.error(err);
+        check(`scenario "${name}" ran to the end`, false, String(err?.message || err).split('\n')[0]);
+      }
     }
   } finally {
     await browser.close();
@@ -2559,6 +2565,14 @@ async function scenarioLinks(browser, state) {
   await ctx.close();
 }
 
+// Opens the first document of the library (waits for the card: the library fills from IndexedDB a moment after the page loads).
+async function openFirstDocument(page) {
+  await page.waitForSelector('main p.line-clamp-2', { timeout: 20000 });
+  await sleep(300);
+  await page.evaluate(() => [...document.querySelectorAll('main p.line-clamp-2')].find((p) => p.textContent.length)?.closest('.cursor-pointer, div.group')?.click());
+  await page.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 20000 });
+}
+
 // A rough picture of the paper: dark pixels per horizontal band. It changes when the page is moved.
 const paperBands = (page) =>
   page.evaluate(() => {
@@ -2687,8 +2701,7 @@ async function scenarioHand(browser, state) {
   check('Settings has "Start with": Automatic is chosen', (await page.evaluate(() => [...[...document.querySelectorAll('p')].find((p) => p.textContent === 'Start with').parentElement.parentElement.querySelectorAll('button')].find((b) => b.textContent === 'Automatic')?.getAttribute('aria-pressed'))) === 'true');
   check('...Pen can be chosen', (await choose('Pen')) === 'true');
   await page.goto(BASE, { waitUntil: 'networkidle0' });
-  await page.evaluate(() => [...document.querySelectorAll('main p.line-clamp-2')].find((p) => p.textContent.length)?.closest('.cursor-pointer, div.group')?.click());
-  await page.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 15000 });
+  await openFirstDocument(page);
   await waitUntil(async () => (await paperStats(page))?.dark > 100, { label: 'the document to open again' });
   await sleep(800);
   check('with Pen chosen a document opens with the pen in hand', (await pressed('tool-pen')) === 'true' && (await pressed('tool-hand')) !== 'true');
@@ -2701,17 +2714,20 @@ async function scenarioHand(browser, state) {
   await touch.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
   await realDefaults(touch);
   await touch.evaluateOnNewDocument(() => localStorage.setItem('quarc_reader_settings', JSON.stringify({ settingsVersion: 3, readMode: 'scroll', paperMode: 'white' })));
-  await touch.goto(BASE, { waitUntil: 'networkidle0' });
-  const coarse = await touch.evaluate(() => matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches);
-  if (!coarse) {
-    console.log('  (this browser does not emulate a coarse pointer: the touch-screen check is covered by the unit tests only)');
-  } else {
-    await touch.evaluate(() => [...document.querySelectorAll('main p.line-clamp-2')].find((p) => p.textContent.length)?.closest('.cursor-pointer, div.group')?.click());
-    await touch.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 15000 });
-    await touch.waitForSelector('[data-testid="tool-pen"]', { timeout: 15000 });
-    await sleep(800);
-    check('on a touch screen a document opens with the pen in hand', (await touch.$eval('[data-testid="tool-pen"]', (el) => el.getAttribute('aria-pressed'))) === 'true');
-    check('...and the dock has no Hand button', !(await touch.$('[data-testid="tool-hand"]')));
+  try {
+    await touch.goto(BASE, { waitUntil: 'networkidle0' });
+    const coarse = await touch.evaluate(() => matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches);
+    if (!coarse) {
+      console.log('  (this browser does not emulate a coarse pointer: the touch-screen check is covered by the unit tests only)');
+    } else {
+      await openFirstDocument(touch);
+      await touch.waitForSelector('[data-testid="tool-pen"]', { timeout: 20000 });
+      await sleep(800);
+      check('on a touch screen a document opens with the pen in hand', (await touch.$eval('[data-testid="tool-pen"]', (el) => el.getAttribute('aria-pressed'))) === 'true');
+      check('...and the dock has no Hand button', !(await touch.$('[data-testid="tool-hand"]')));
+    }
+  } catch (err) {
+    check('the touch-screen check ran', false, String(err?.message || err).split('\n')[0]);
   }
   await touch.close();
   await ctx.close();
