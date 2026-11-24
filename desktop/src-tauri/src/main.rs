@@ -7,6 +7,10 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_fs::FsExt;
 
+// Quarc Store single sign-on (see Quarc_Store/sso-kit/README.md).
+mod quarc_sso;
+mod quarc_sso_shared;
+
 // "Open with Quarc Reader": a PDF double-clicked in the file manager, "Open with…", dropped on the app's
 // icon, or passed on the command line. The window shows the Quarc Reader server, so the page cannot be
 // handed a file directly. Instead:
@@ -92,6 +96,11 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .invoke_handler(tauri::generate_handler![
+            quarc_sso::quarc_sso_peek,
+            quarc_sso::quarc_sso_sync,
+            quarc_sso::quarc_sso_open_store
+        ])
         .manage(Pending(Mutex::new(Queue::default())))
         .on_page_load(|webview, payload| {
             if webview.label() != "main" {
