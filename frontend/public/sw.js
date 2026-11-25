@@ -57,7 +57,9 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
+      // 'no-cache': ask the server whether index.html changed instead of trusting the browser's own HTTP cache (which would
+      // keep serving the old build after a deploy until a hard reload); the server answers 304 when it did not.
+      fetch(request, { cache: 'no-cache' })
         .then((response) => {
           if (response.ok) caches.open(CACHE_NAME).then((c) => c.put('/index.html', response.clone()));
           return response;

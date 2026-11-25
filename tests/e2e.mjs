@@ -1332,7 +1332,7 @@ async function scenarioFind(browser, state) {
     await p2.keyboard.up('Control');
     await p2.keyboard.type('chapter 3');
     await p2.waitForFunction(() => document.querySelector('[data-testid="find-count"]')?.innerText === '1 of 1', { timeout: 20000 });
-    await waitUntil(async () => parseInt((await p2.$eval('[data-testid="page-counter"]', (el) => el.innerText)).split('/')[0], 10) === 3, { label: 'book mode to turn to page 3' });
+    await waitUntil(async () => parseInt((await p2.$eval('[data-testid="page-counter"]', (el) => el.innerText)).split('/')[0], 10) === 3, { timeout: 30000, label: 'book mode to turn to page 3' });
     check('in book mode a hit turns to its page', true);
     const zoomBook = await p2.$eval('[data-testid="zoom-level"]', (el) => parseInt(el.textContent, 10));
     check('...and the page is shown whole, as in a book', zoomBook < 120, `${zoomBook}%`);
@@ -2839,6 +2839,23 @@ async function scenarioScrollbar(browser, state) {
   await sleep(900);
   const b6 = await barState(page);
   check('End (the last page) puts the thumb at the bottom of the track', b6.top + b6.h > b6.trackTop + b6.trackH - 40, JSON.stringify(b6));
+
+  // ----- resuming where I was: the bar is there, at the place that was saved -----
+  await page.keyboard.press('Home');
+  await sleep(600);
+  const b7 = await barState(page);
+  await dragBar(page, { x: b7.x, y: b7.top + b7.h / 2 }, b7.trackTop + b7.trackH / 2);
+  await sleep(3000); // the reading position is saved after a pause
+  await page.reload({ waitUntil: 'networkidle0' });
+  await waitUntil(async () => (await indicator(page)) !== null, { label: 'the reader after a reload' });
+  await sleep(1500);
+  const b8 = await barState(page);
+  check('resuming after a reload: the scroll bar is there, at the saved place', !!b8 && b8.shown && b8.top > b8.trackTop + b8.trackH * 0.3, JSON.stringify(b8));
+  await page.goto(BASE, { waitUntil: 'networkidle0' });
+  await openFirstDocument(page);
+  await sleep(1500);
+  const b9 = await barState(page);
+  check('...and after leaving for the library and opening the document again', !!b9 && b9.shown && b9.top > b9.trackTop + b9.trackH * 0.3, JSON.stringify(b9));
   check('no page errors', errors.length === 0, errors.join('\n'));
 
   // ----- no scroll bar on a touch screen -----

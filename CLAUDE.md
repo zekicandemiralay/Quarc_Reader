@@ -195,6 +195,13 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   `pdf.worker.min-<hash>.js`, `nginx.conf` has a `location ~* \.mjs$ { default_type text/javascript; }` as well, `sw.js` caches under
   `quarc-reader-v2` (the old cache could hold the wrong-type response for good — `/assets/` is cache-first), and
   `describeOpenError` reports this as `engine`. Browser scenario `mime` serves `dist/` like such a server (`.mjs` → octet-stream).
+- **A deploy must show up without a hard reload.** nginx used to send `index.html` with no `Cache-Control`, so a browser (and the
+  desktop app's WebView) kept its copy for hours on a heuristic and went on loading the OLD content-hashed scripts — "the new
+  feature only appears after Shift+F5". The service worker's page load also went through that HTTP cache. Now `nginx.conf` sends
+  `Cache-Control: no-cache` for `/index.html` (every app route falls back to it), `/manifest.json` and `/sw.js`, and `sw.js` loads
+  navigations with `fetch(request, { cache: 'no-cache' })` (a 304 when nothing changed). No nginx runs in the tests:
+  `test/caching.test.js` checks the files for these rules. A device that already holds a stale `index.html` needs ONE hard reload
+  after the first deploy that has the fix. Never add a blanket `expires`/`max-age` for the app — only `/assets/*` is hashed.
 - Proton Drive can also rename a *build folder* mid-build: `frontend/dist/assets` became `assets (# Name clash … #)` and the
   test app then 404'd its main script (blank page, "no Username input"). Rebuild and check `ls frontend/dist/assets` before running the
   browser tests.
@@ -239,9 +246,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 194 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, start tool, scroll bar, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 197 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, start tool, scroll bar, caching rules, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links hand scrollbar barcolours library big   (390 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links hand scrollbar barcolours library big   (392 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 
