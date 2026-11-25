@@ -34,6 +34,7 @@ import useAuthStore from '../../store/authStore';
 import useSettings, { resolvePaper } from '../../store/settingsStore';
 import Popover, { MenuItem, MenuSeparator } from '../../components/Popover';
 import { toast } from '../../components/Toasts';
+import { askConfirm } from '../../components/ConfirmDialog';
 import ReaderCanvas from '../../reader/ReaderCanvas';
 import { buildPages, layoutItemsFor, NOTE_SIZES, NOTE_STYLES, PX_PER_PT } from '../../reader/geometry';
 import { activeMarks } from '../../reader/marks';
@@ -275,13 +276,13 @@ function Reader({ id }) {
     const index = canvasRef.current?.currentIndex() ?? 0;
     const here = pages[index];
     if (here?.kind !== 'note') return;
-    if (!window.confirm(t('reader.deleteNotePageConfirm'))) return;
+    setMenu(null);
+    if (!(await askConfirm(t('reader.deleteNotePageConfirm')))) return;
     const noteId = here.id;
     const items = currentItems().map((it) => (it.t === 'n' && it.id === noteId ? { ...it, del: true, u: Date.now() } : it));
     await updateDoc(id, { layout: items });
     // Undo brings the page back, with whatever was written on it.
     canvasRef.current?.recordOp({ undo: () => setNoteDeleted(noteId, false), redo: () => setNoteDeleted(noteId, true) });
-    setMenu(null);
   }
 
   // ----- bookmarks ----------------------------------------------------------------------------------------

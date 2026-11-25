@@ -5,6 +5,7 @@ import useIncoming from './store/incomingStore';
 import useSettings, { applyTheme } from './store/settingsStore';
 import { startSyncLoop } from './lib/sync';
 import Toasts from './components/Toasts';
+import ConfirmDialog from './components/ConfirmDialog';
 import Login from './pages/Login/Login';
 import Library from './pages/Library/Library';
 import Reader from './pages/Reader/Reader';
@@ -92,6 +93,7 @@ export default function App() {
       </Routes>
       <IncomingFiles />
       <Toasts />
+      <ConfirmDialog />
     </>
   );
 }

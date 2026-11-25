@@ -2405,10 +2405,31 @@ async function scenarioUndo(browser, state) {
   await waitIndicator(page, '2/4');
   await sleep(700);
   const withNote = await madeSoFar(page);
+  // As in the Windows app: Tauri's dialog plugin turns window.confirm into an async function whose dialog the page may
+  // not open (a Promise, so it never said no). The question must be the app's own.
+  await page.evaluate(() => {
+    window.confirm = async () => { throw new Error('dialog.confirm not allowed'); };
+  });
+  let nativeDialogs = 0;
+  const countNative = () => { nativeDialogs++; };
+  page.on('dialog', countNative);
   await menuClick(page, 'More', 'Delete this note page');
+  await page.waitForSelector(MODAL, { timeout: 5000 }).catch(() => {});
+  const asked = await page.$eval(MODAL, (el) => el.innerText).catch(() => '');
+  check('deleting a note page asks first, in the app', /everything written on it/.test(asked), asked || '(no question)');
   await settle();
+  check('...and nothing is deleted while the question is open', (await madeSoFar(page)).notes === 1);
+  await page.evaluate((sel) => [...document.querySelectorAll(sel + ' button')].find((b) => b.innerText.trim() === 'Cancel')?.click(), MODAL);
+  await settle();
+  check('Cancel keeps the note page', !(await page.$(MODAL)) && (await madeSoFar(page)).notes === 1, made(await madeSoFar(page)));
+  await menuClick(page, 'More', 'Delete this note page');
+  await page.waitForSelector(MODAL, { timeout: 5000 });
+  await page.evaluate((sel) => [...document.querySelectorAll(sel + ' button')].find((b) => b.innerText.trim() === 'Delete')?.click(), MODAL);
+  await settle();
+  page.off('dialog', countNative);
+  check('no native dialog was used', nativeDialogs === 0, String(nativeDialogs));
   const gone = await madeSoFar(page);
-  check('deleting the note page removes it', gone.notes === 0, made(gone));
+  check('confirming deletes the note page', gone.notes === 0, made(gone));
   await press('KeyZ');
   const back = await madeSoFar(page);
   check('undo brings the note page back', back.notes === 1 && back.detail.notes[0].id === withNote.detail.notes[0].id, made(back));

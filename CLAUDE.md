@@ -188,6 +188,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 - This folder is synced by **Proton Drive**: when a write races its sync it can leave `File (# Name clash <date> <id> #).ext`
   next to the real file and an edit can seem to vanish. After a batch of edits that "succeeded" but is not there, look for such a
   file, diff it against the real one, re-apply, delete it — and never `git add -A` with one present (it is not gitignored).
+- **Never `window.confirm` (or `alert`).** The Windows app shows this page from the server, and Tauri's dialog plugin (there for
+  Save-as) replaces `window.confirm` with an async function whose dialog the page is not allowed to open: a Promise is truthy, so
+  `if (!window.confirm(…)) return` went on without asking. Ask with `askConfirm()` from `components/ConfirmDialog.jsx`.
 - **No asset may be named `.mjs`.** pdf.js' worker is a module script, which browsers refuse unless the server calls it JavaScript,
   and the nginx image on the owner's server did not know `.mjs` (it sent a generic download): every PDF then failed with "Setting up
   fake worker failed: error loading dynamically imported module …/pdf.worker.min-<hash>.mjs" — shown as "could not be opened" /
