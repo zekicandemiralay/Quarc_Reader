@@ -18,6 +18,7 @@ iOS (as a PWA).
   MS-Paint-style cut selection, every Excalidraw tool (shapes, arrows, text, images), palm rejection, undo/redo of everything (strokes, highlights, notes, note pages, bookmarks)
 - **Real text highlights** — select text (or just swipe the highlighter over it: it **snaps to the words**) and it becomes a
   highlight / underline / strike-through with an optional note; listed in a notes panel; tap one to edit it
+- **A scroll bar on computers** — drag the thumb at the right edge through a long document, like in any PDF reader
 - **Links in the PDF work** — a tap opens a web link or jumps to the page a table-of-contents entry or footnote points at (with a Back button)
 - **Note pages** — insert a blank, lined, squared or dotted page anywhere in a PDF and write on it
 - **Save the PDF with your notes in it** — ink as sharp vector lines, highlights as real PDF highlight annotations that other readers show, note pages as real pages. Save a copy, or replace the document in your library (the original is kept and

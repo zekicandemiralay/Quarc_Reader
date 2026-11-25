@@ -33,6 +33,7 @@ import { drawPaper, drawMarks, DARK_FILTER, DESK } from './paper';
 import { newMark, mergeMarks, updateMark, deleteMark, hitMark, activeMarks, markChanges, restoreMarks } from './marks';
 import { History } from './history';
 import { LinkIndex, hitLink, destPageIndex } from './pdfLinks';
+import { stackProgress, stackScrollY, bookProgress, bookPageAt, thumbBox, progressAt, dragTop } from './scrollbar';
 import { startToolFor, isMouseDevice, touchPrimaryNow } from '../lib/device';
 import { getPlatform } from '../lib/updateCheck';
 import { openExternal } from '../lib/openExternal';
@@ -58,6 +59,7 @@ const PALM_WINDOW_MS = 500; // touches this soon after pen activity are a restin
 const PALM_SIZE = 60; // touch contact (CSS px) this big is a palm, not a fingertip
 const HIGHLIGHTER_OPACITY = 40;
 const TAP_MOVE_TOLERANCE = 10;
+const BAR_MARGIN = 8; // px between the scroll bar's track and the top and bottom of the reader
 const LINK_TAP_MS = 600; // a press on a link that lasts longer is a mark of the pen, not a tap
 const DOUBLE_TAP_MS = 350;
 const DOUBLE_TAP_DIST = 40;
@@ -185,6 +187,10 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const toolBeforeSnip = useRef(null);
   const lastCopy = useRef(null); // the last picture copied from a region (its pixel size and the region's), see pastedPictureSize
   const lastPointer = useRef(null); // where the pointer last was (client px), for pasting there
+  const barRef = useRef(null); // the scroll bar's track, its thumb and the page tooltip (see "the scroll bar" below)
+  const thumbRef = useRef(null);
+  const tipRef = useRef(null);
+  const barDrag = useRef(null); // { pointerId, grab, trackTop, trackH, h } while the thumb is held
   const linksRef = useRef(null); // LinkIndex: the clickable links of each page
   const hoverLink = useRef(null); // { link, index }: the link under the mouse/pen, outlined as a hint
   const penHistory = useSettings((s) => s.penColorHistory);
@@ -314,6 +320,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 
     const index = currentPage(L, view, rect);
     if (modeRef.current === 'book' && index !== bookPageRef.current) bookPageRef.current = index;
+    updateScrollbar(view, rect, L, modeRef.current === 'book' ? bookPageRef.current : index);
     if (index !== currentIndexRef.current) {
       currentIndexRef.current = index;
       setCurrentIndex(index);
@@ -1342,6 +1349,97 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
     return true;
   }
 
+  // ---------- the scroll bar (on computers) ----------
+  //
+  // A thumb on a track at the right edge, like a normal PDF reader's: drag it to go through the document (in book mode it is a
+  // page slider), click the bare track to jump there. It follows the view on every change by writing to the DOM directly
+  // (`updateScrollbar` from `syncPaper`), not through React state; the maths is in `scrollbar.js`.
+  function updateScrollbar(view, rect, L, index) {
+    const bar = barRef.current;
+    const thumb = thumbRef.current;
+    if (!bar || !thumb || !view || !rect?.height) return;
+    const book = modeRef.current === 'book';
+    const m = book ? (L.n > 1 ? { progress: bookProgress(index, L.n), visible: 1 / L.n } : null) : stackProgress(view, rect, L);
+    if (!m) {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = 'block';
+    const { h, top } = thumbBox(m.progress, m.visible, rect.height - 2 * BAR_MARGIN);
+    thumb.style.height = `${h}px`;
+    thumb.style.transform = `translateY(${top}px)`;
+    if (barDrag.current && tipRef.current) tipRef.current.textContent = t('reader.pageOf', { n: index + 1, total: L.n });
+  }
+
+  function moveBar(clientY) {
+    const d = barDrag.current;
+    const v = currentView();
+    const rect = sizeRef.current;
+    const L = layoutRef.current;
+    if (!d || !v || !rect.height) return;
+    const progress = progressAt(dragTop(clientY - d.trackTop, d.grab, d.h, d.trackH), d.h, d.trackH);
+    if (modeRef.current === 'book') {
+      const i = bookPageAt(progress, L.n);
+      if (i !== bookPageRef.current) goToPage(i);
+    } else {
+      const c = clampView(v.scrollX, stackScrollY(progress, v.zoom, rect, L), v.zoom);
+      applyView({ ...c, zoom: v.zoom });
+    }
+  }
+
+  function barPointerDown(e) {
+    if (e.button !== 0) return;
+    const bar = barRef.current;
+    const thumb = thumbRef.current;
+    if (!bar || !thumb) return;
+    e.preventDefault();
+    e.stopPropagation();
+    stopInertia();
+    stopInitialView();
+    const track = bar.getBoundingClientRect();
+    const box = thumb.getBoundingClientRect();
+    const onThumb = e.clientY >= box.top && e.clientY <= box.bottom;
+    barDrag.current = { pointerId: e.pointerId, grab: onThumb ? e.clientY - box.top : box.height / 2, trackTop: track.top, trackH: track.height, h: box.height };
+    bar.setPointerCapture?.(e.pointerId);
+    if (tipRef.current) tipRef.current.style.display = 'block';
+    moveBar(e.clientY);
+  }
+
+  function barPointerMove(e) {
+    if (barDrag.current?.pointerId === e.pointerId) moveBar(e.clientY);
+  }
+
+  function barPointerUp(e) {
+    const drag = barDrag.current;
+    if (drag?.pointerId !== e.pointerId) return;
+    // Changing pages quickly (a book-mode drag shows a page per step) can leave the view on an earlier page when the pointer is
+    // let go: once things have settled, the page under the thumb is put right.
+    if (modeRef.current === 'book') {
+      const y = e.clientY;
+      window.setTimeout(() => {
+        if (barDrag.current) return;
+        barDrag.current = drag;
+        moveBar(y);
+        barDrag.current = null;
+      }, 160);
+    }
+    barDrag.current = null;
+    if (tipRef.current) tipRef.current.style.display = 'none';
+    try {
+      barRef.current?.releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* already released */
+    }
+  }
+
+  // The bar is put right again whenever it appears or the document changes shape.
+  useEffect(() => {
+    const v = currentView();
+    const rect = sizeRef.current;
+    if (v && rect?.height) updateScrollbar(v, rect, layoutRef.current, modeRef.current === 'book' ? bookPageRef.current : currentIndexRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mouseDevice, chrome, mode, layout]);
+
   // ---------- links inside the PDF ----------
   //
   // A plain tap (no drag, no hold) on a link of the page opens it, whatever pen is in hand: the stroke that the tap would have
@@ -1797,6 +1895,10 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   }
 
   function handlePointerMoveCapture(e) {
+    if (e.target?.closest?.('[data-scrollbar]')) {
+      clearLinkHover(); // the scroll bar's own business: it handles its pointer itself
+      return;
+    }
     if (e.pointerType === 'pen') lastPenActivity.current = Date.now();
     lastPointer.current = { x: e.clientX, y: e.clientY };
     updateLinkHover(e);
@@ -1872,6 +1974,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   }
 
   function handlePointerUpCapture(e) {
+    if (e.target?.closest?.('[data-scrollbar]')) return; // the scroll bar's own business
     if (ignoredTouches.current.delete(e.pointerId)) {
       consume(e);
       return;
@@ -2761,6 +2864,33 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
               setMarkPop(null);
             }}
           />
+        )}
+
+        {mouseDevice && chrome && (
+          <div
+            ref={barRef}
+            data-overlay
+            data-scrollbar
+            data-testid="scrollbar"
+            role="scrollbar"
+            aria-orientation="vertical"
+            aria-label={t('reader.scrollbar')}
+            onPointerDown={barPointerDown}
+            onPointerMove={barPointerMove}
+            onPointerUp={barPointerUp}
+            onPointerCancel={barPointerUp}
+            className="absolute right-0.5 z-[5] w-3 touch-none select-none rounded-full bg-neutral-900/[0.05] dark:bg-white/10"
+            style={{ display: 'none', top: BAR_MARGIN, bottom: BAR_MARGIN }}
+          >
+            <div ref={thumbRef} data-testid="scrollbar-thumb" className="absolute inset-x-0.5 top-0 rounded-full bg-neutral-500/50 transition-colors hover:bg-neutral-600/70 dark:bg-neutral-300/40 dark:hover:bg-neutral-200/60">
+              <span
+                ref={tipRef}
+                data-testid="scrollbar-tip"
+                className="pointer-events-none absolute right-full top-1/2 mr-2 -translate-y-1/2 whitespace-nowrap rounded-lg bg-neutral-900/90 px-2.5 py-1 text-xs font-medium text-white shadow-float"
+                style={{ display: 'none' }}
+              />
+            </div>
+          </div>
         )}
 
         <PageBar

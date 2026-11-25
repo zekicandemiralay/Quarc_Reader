@@ -89,6 +89,8 @@
     "turnTap": "Tap edges",
     "turnBoth": "Both",
     "pageN": "Page {{n}}",
+    "pageOf": "Page {{n}} / {{total}}",
+    "scrollbar": "Scroll through the document",
     "selectText": "Select text to highlight",
     "snapText": "Snap to text",
     "snapTextHint": "A highlighter stroke over text becomes a real text highlight (searchable, listed in your notes, exported as a PDF highlight). Off: it stays freehand ink.",

@@ -66,6 +66,8 @@ opens, where you left off.
   counter ("3 of 17") fills in as the document is searched. Capital letters never matter, and accents don't either unless you
   switch **á** on ("cay" then no longer finds "çay"). A scanned PDF has no text to search. In a document that lives only on
   your server, searching reads all of it once.
+- **Scroll bar (on a computer):** a bar at the right edge, like in other PDF readers. Drag its thumb to go through the whole document
+  — a tooltip shows the page you are on — or click the bar to jump to that place. In book mode it slides from page to page.
 - **Links in the PDF:** tap a web link (or an email address) to open it, or a link inside the document (a table of contents, a
   footnote, "see page 12") to jump there — a **Back** button appears to return to where you were. A short tap is enough, whichever
   pen is in your hand; dragging the pen over a link still writes. Hover over a link with the mouse or pen and it is outlined.

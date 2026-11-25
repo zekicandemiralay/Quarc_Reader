@@ -62,6 +62,7 @@ async function main() {
       ['undo', scenarioUndo],
       ['links', scenarioLinks],
       ['hand', scenarioHand],
+      ['scrollbar', scenarioScrollbar],
       ['library', scenarioLibrary],
       ['big', scenarioBig],
     ];
@@ -2731,6 +2732,155 @@ async function scenarioHand(browser, state) {
   }
   await touch.close();
   await ctx.close();
+}
+
+// Where the scroll bar and its thumb are on screen, and what the page tooltip says.
+const barState = (page) =>
+  page.evaluate(() => {
+    const track = document.querySelector('[data-testid="scrollbar"]');
+    const thumb = document.querySelector('[data-testid="scrollbar-thumb"]');
+    if (!track || !thumb) return null;
+    const tr = track.getBoundingClientRect();
+    const hr = thumb.getBoundingClientRect();
+    const tip = document.querySelector('[data-testid="scrollbar-tip"]');
+    return {
+      shown: getComputedStyle(track).display !== 'none',
+      x: tr.left + tr.width / 2,
+      trackTop: tr.top,
+      trackH: tr.height,
+      top: hr.top,
+      h: hr.height,
+      tip: tip ? tip.textContent : '',
+      tipShown: !!tip && getComputedStyle(tip).display !== 'none',
+    };
+  });
+const pageOfIndicator = async (page) => parseInt(((await indicator(page)) || '0').split('/')[0], 10);
+const settlesOn = (page, ok) => waitUntil(async () => ok(await pageOfIndicator(page)), { timeout: 6000, label: 'the page counter' }).then(() => true, () => false);
+
+// Drags the thumb (or presses on the bare track, when `from` is not on it) to y, and lets go unless `hold`.
+async function dragBar(page, from, toY, { hold = false } = {}) {
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  const steps = 10;
+  for (let i = 1; i <= steps; i++) {
+    await page.mouse.move(from.x, from.y + ((toY - from.y) * i) / steps);
+    await sleep(15);
+  }
+  if (!hold) await page.mouse.up();
+}
+
+async function scenarioScrollbar(browser, state) {
+  section('The scroll bar on a computer: drag, click, page tooltip, book mode — and none on a touch screen');
+  const long = writePdf('book-30.pdf', await makeTestPdf({ pages: 30, title: 'Thirty Pages' }));
+  const ctx = await browser.createBrowserContext();
+  const page = await ctx.newPage();
+  await lightMode(page);
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await login(page, 'sam');
+  await chooseOnImport(page, long, 'device only');
+  await readerReady(page);
+  await sleep(600);
+
+  // ----- scroll mode -----
+  let b = await barState(page);
+  check('a computer has a scroll bar at the right edge', !!b && b.shown);
+  check('at the first page its thumb is at the top, and shorter than the track', !!b && Math.abs(b.top - b.trackTop) < 2 && b.h < b.trackH / 2 && b.h >= 36, JSON.stringify(b));
+  await shot(page, '99-scrollbar');
+
+  await page.mouse.move(640, 500);
+  for (let i = 0; i < 6; i++) {
+    await page.mouse.wheel({ deltaY: 700 });
+    await sleep(40);
+  }
+  await sleep(700);
+  const b2 = await barState(page);
+  check('scrolling with the wheel moves the thumb down', b2.top > b.top + 4, `${b.top} -> ${b2.top}`);
+
+  // drag it to the middle of the track
+  const mid = b.trackTop + b.trackH / 2;
+  await dragBar(page, { x: b2.x, y: b2.top + b2.h / 2 }, mid, { hold: true });
+  const held = await barState(page);
+  check('while it is held a tooltip says which page it is', held.tipShown && /Page \d+ \/ 30/.test(held.tip), held.tip);
+  await shot(page, '99-scrollbar-drag');
+  await page.mouse.up();
+  await sleep(700);
+  const midOk = await settlesOn(page, (n) => n >= 12 && n <= 19);
+  check('dragging the thumb to the middle of the track goes to the middle of the document', midOk, `page ${await pageOfIndicator(page)}`);
+  check('...and the tooltip goes when it is let go', !(await barState(page)).tipShown);
+  await sleep(1200);
+  check('dragging the bar writes nothing (the pen is in hand)', (await madeSoFar(page)).ink === 0);
+
+  const b3 = await barState(page);
+  await dragBar(page, { x: b3.x, y: b3.top + b3.h / 2 }, b3.trackTop + b3.trackH + 60);
+  await sleep(700);
+  check('dragging past the bottom of the track goes to the last page', await settlesOn(page, (n) => n === 30), await indicator(page));
+  const b4 = await barState(page);
+  check('...with the thumb at the bottom', Math.abs(b4.top + b4.h - (b4.trackTop + b4.trackH)) < 2, JSON.stringify(b4));
+
+  // a click on the bare track jumps there
+  await page.mouse.click(b4.x, b4.trackTop + 6);
+  await sleep(700);
+  check('a click at the top of the track jumps to the first page', await settlesOn(page, (n) => n === 1), await indicator(page));
+  const b5 = await barState(page);
+  await page.mouse.click(b5.x, b5.trackTop + b5.trackH / 2);
+  await sleep(700);
+  check('a click in the middle of the track jumps to the middle of the document', await settlesOn(page, (n) => n >= 12 && n <= 19), `page ${await pageOfIndicator(page)}`);
+
+  // the keyboard and the bar agree
+  await page.keyboard.press('End');
+  await sleep(900);
+  const b6 = await barState(page);
+  check('End (the last page) puts the thumb at the bottom of the track', b6.top + b6.h > b6.trackTop + b6.trackH - 40, JSON.stringify(b6));
+  check('no page errors', errors.length === 0, errors.join('\n'));
+
+  // ----- no scroll bar on a touch screen -----
+  const touch = await ctx.newPage();
+  try {
+    await touch.setViewport({ width: 820, height: 1100, isMobile: true, hasTouch: true, deviceScaleFactor: 1 });
+    await testDefaults(touch);
+    await touch.goto(BASE, { waitUntil: 'networkidle0' });
+    if (!(await touch.evaluate(() => matchMedia('(pointer: coarse)').matches))) {
+      console.log('  (this browser does not emulate a coarse pointer: the touch-screen check is covered by the unit tests only)');
+    } else {
+      await openFirstDocument(touch);
+      await touch.waitForSelector('[data-testid="tool-pen"]', { timeout: 20000 });
+      await sleep(800);
+      check('a touch screen has no scroll bar', !(await touch.$('[data-testid="scrollbar"]')));
+    }
+  } catch (err) {
+    check('the touch-screen check ran', false, String(err?.message || err).split('\n')[0]);
+  }
+  await touch.close();
+  await ctx.close();
+
+  // ----- book mode: the bar is a page slider -----
+  const ctxB = await browser.createBrowserContext();
+  const book = await ctxB.newPage();
+  await book.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+  await testDefaults(book, { readMode: 'book' });
+  const errorsB = [];
+  book.on('pageerror', (e) => errorsB.push(e.message));
+  await login(book, 'sam');
+  await chooseOnImport(book, long, 'device only');
+  await readerReady(book);
+  await sleep(600);
+  const k = await barState(book);
+  check('in book mode there is a scroll bar too', !!k && k.shown);
+  check('...its thumb is one page long (the minimum size) and at the top', !!k && Math.abs(k.top - k.trackTop) < 2 && k.h < 60, JSON.stringify(k));
+  await dragBar(book, { x: k.x, y: k.top + k.h / 2 }, k.trackTop + k.trackH / 2);
+  await sleep(900);
+  check('dragging it to the middle shows a page from the middle of the book', await settlesOn(book, (n) => n >= 12 && n <= 19), `page ${await pageOfIndicator(book)}`);
+  const k2 = await barState(book);
+  await dragBar(book, { x: k2.x, y: k2.top + k2.h / 2 }, k2.trackTop + k2.trackH + 60);
+  await sleep(900);
+  check('...and to the bottom shows the last page', await settlesOn(book, (n) => n === 30), await indicator(book));
+  await book.keyboard.press('Home');
+  await sleep(900);
+  const k3 = await barState(book);
+  check('Home puts the thumb back at the top', Math.abs(k3.top - k3.trackTop) < 2, JSON.stringify(k3));
+  check('no page errors in book mode', errorsB.length === 0, errorsB.join('\n'));
+  await ctxB.close();
 }
 
 async function cardMenu(page, title, itemRe) {

@@ -89,6 +89,8 @@
     "turnTap": "Kenara dokun",
     "turnBoth": "İkisi de",
     "pageN": "Sayfa {{n}}",
+    "pageOf": "Sayfa {{n}} / {{total}}",
+    "scrollbar": "Belgede gezin",
     "selectText": "Vurgulamak için metin seç",
     "snapText": "Metne yapış",
     "snapTextHint": "Metnin üzerinden geçen fosforlu kalem çizgisi gerçek bir metin vurgusuna dönüşür (aranabilir, notlarında listelenir, PDF vurgusu olarak kaydedilir). Kapalıyken serbest çizim olarak kalır.",

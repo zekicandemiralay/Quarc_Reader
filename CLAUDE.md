@@ -118,6 +118,16 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   back — leaving them must not turn the pen on. Anything new that has to work "whatever tool is in hand" must include `readingRef`
   (see `linksOn`). The harness's `testDefaults` injects `startTool: 'pen'` (nearly every scenario writes at once); only `hand` uses the
   real defaults. Headless Chrome is a "computer"; `setViewport({ isMobile: true, hasTouch: true })` makes it a coarse-pointer one.
+- **Scroll bar (computers only)** (`reader/scrollbar.js` pure + unit-tested; element, `updateScrollbar`, `moveBar`, `barPointer*` in
+  `ReaderCanvas`): a track and thumb at the right edge like a normal PDF reader's, shown when `mouseDevice` (desktop app, or a browser
+  whose primary pointer is not a finger) and the chrome is visible. Scroll mode: the thumb is the share of the stack on screen
+  (`stackProgress`, min 36 px), dragging maps back with `stackScrollY` + `clampView` + `applyView`, a click on the bare track grabs
+  the thumb's middle (jump there). Book mode: a page slider (`bookProgress`/`bookPageAt`, `goToPage`), with a settle step 160 ms after
+  release because a page change per drag step can leave the view one page behind. A tooltip "Page N / total" shows while held. It
+  follows the view by writing to the DOM from `syncPaper` (never React state — that runs on every scroll frame). The element is
+  `data-overlay` (so `handlePointerDownCapture` ignores it) and `data-scrollbar` (the up/move capture handlers return early for it).
+  Gotcha for tests: the tooltip must not carry `tabular-nums`, or the harness's `indicator()` (first `span.tabular-nums` that looks
+  like `n / m`) reads the tooltip instead of the page counter.
 - **Links inside the PDF** (`reader/pdfLinks.js` pure + `LinkIndex`, `lib/openExternal.js`; wired in `ReaderCanvas`: `linksOn`, `linkAt`,
   `openLink`, `tapLink`, `updateLinkHover`): the page is canvas-drawn, so a link only works because we ask pdf.js for the page's
   `getAnnotations()` (once per page, for the pages on screen, from `syncPaper`; `LinkIndex.peek` answers synchronously so a tap never
@@ -224,9 +234,9 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 
 ```bash
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
-cd frontend && npm test                  # 187 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, start tool, i18n, shapes; i18n lists run-time key families in DYNAMIC)
+cd frontend && npm test                  # 194 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, start tool, scroll bar, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links hand library big   (364 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links hand scrollbar library big   (384 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 
