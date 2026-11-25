@@ -63,6 +63,7 @@ async function main() {
       ['links', scenarioLinks],
       ['hand', scenarioHand],
       ['scrollbar', scenarioScrollbar],
+      ['barcolours', scenarioScrollbarColours],
       ['library', scenarioLibrary],
       ['big', scenarioBig],
     ];
@@ -566,7 +567,13 @@ async function scenarioExport(browser, state) {
   check('both files are on the device', db.blobs.length === 2);
   await waitUntil(async () => (await page.$eval('.quarc-canvas-page', (el) => el.parentElement.innerText)).includes('/ 4'), { label: 'reader reloaded with 4 pages' });
   await sleep(1500);
-  const live = db.ann.flatMap((r) => JSON.parse(r.ink_json).elements.filter((e) => !e.isDeleted)).length + db.ann.flatMap((r) => JSON.parse(r.marks_json).filter((m) => !m.del)).length;
+  // (read again: the annotations are cleared a moment after the replacement is stored, so the snapshot above can still have them)
+  const liveItems = async () => {
+    const fresh = await dumpDb(page);
+    return fresh.ann.flatMap((r) => JSON.parse(r.ink_json).elements.filter((e) => !e.isDeleted)).length + fresh.ann.flatMap((r) => JSON.parse(r.marks_json).filter((m) => !m.del)).length;
+  };
+  await waitUntil(async () => (await liveItems()) === 0, { timeout: 8000, label: 'the annotations to be cleared' }).catch(() => {});
+  const live = await liveItems();
   check('the ink and highlights are now part of the pages — no longer separate annotations', live === 0, `${live} live items`);
   await page.click('button[title="Next page"]').catch(() => {});
   await page.click('button[title="Previous page"]').catch(() => {});
@@ -2881,6 +2888,78 @@ async function scenarioScrollbar(browser, state) {
   check('Home puts the thumb back at the top', Math.abs(k3.top - k3.trackTop) < 2, JSON.stringify(k3));
   check('no page errors in book mode', errorsB.length === 0, errorsB.join('\n'));
   await ctxB.close();
+}
+
+// The colour of one pixel of what is on screen (a 1x1 screenshot, decoded by the browser).
+async function screenPixel(page, x, y) {
+  const b64 = await page.screenshot({ clip: { x: Math.round(x), y: Math.round(y), width: 1, height: 1 }, encoding: 'base64' });
+  return page.evaluate(async (data) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${data}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const g = canvas.getContext('2d');
+    g.drawImage(img, 0, 0);
+    return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+  }, b64);
+}
+
+// How well the scroll bar's thumb stands out from what is under it (the paper, or the desk beside it): the WCAG contrast ratio
+// between the screen pixel in the middle of the thumb and the same pixel with the bar hidden.
+async function barContrast(page) {
+  const at = await page.evaluate(() => {
+    const r = document.querySelector('[data-testid="scrollbar-thumb"]')?.getBoundingClientRect();
+    return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+  });
+  if (!at) return null;
+  const withThumb = await screenPixel(page, at.x, at.y);
+  await page.evaluate(() => (document.querySelector('[data-testid="scrollbar"]').style.visibility = 'hidden'));
+  const under = await screenPixel(page, at.x, at.y);
+  await page.evaluate(() => (document.querySelector('[data-testid="scrollbar"]').style.visibility = ''));
+  const lum = ([r, g, b]) => {
+    const f = (v) => {
+      const x = v / 255;
+      return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+  };
+  const a = lum(withThumb);
+  const b = lum(under);
+  return { ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05), under, thumb: withThumb };
+}
+
+async function scenarioScrollbarColours(browser, state) {
+  section('The scroll bar can be seen on every paper, in every theme');
+  // The app's theme (light/dark) and the paper (sepia/white/dark) are separate: the bar sits on the paper.
+  const combos = [
+    ['dark', 'sepia'],
+    ['light', 'sepia'],
+    ['dark', 'white'],
+    ['light', 'white'],
+    ['light', 'dark'],
+    ['dark', 'dark'],
+  ];
+  for (const [theme, paper] of combos) {
+    const ctx = await browser.createBrowserContext();
+    try {
+      const page = await ctx.newPage();
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme }]);
+      await testDefaults(page, { paperMode: paper });
+      await login(page, `col-${theme}-${paper}`);
+      await chooseOnImport(page, state.pdfPath, 'device only');
+      await page.waitForFunction(() => location.pathname.startsWith('/read/'), { timeout: 30000 });
+      await page.waitForSelector('[data-testid="scrollbar-thumb"]', { timeout: 20000 });
+      await sleep(1500);
+      const c = await barContrast(page);
+      check(`app ${theme}, paper ${paper}: the thumb stands out from what is under it`, !!c && c.ratio >= 3, c ? `contrast ${c.ratio.toFixed(2)} (thumb ${c.thumb} on ${c.under})` : 'no scroll bar');
+      if (theme === 'dark' && paper === 'sepia') await shot(page, '99-scrollbar-dark-sepia');
+    } catch (err) {
+      check(`app ${theme}, paper ${paper}: the colours were measured`, false, String(err?.message || err).split('\n')[0]);
+    }
+    await ctx.close();
+  }
 }
 
 async function cardMenu(page, title, itemRe) {

@@ -2879,10 +2879,18 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
             onPointerMove={barPointerMove}
             onPointerUp={barPointerUp}
             onPointerCancel={barPointerUp}
-            className="absolute right-0.5 z-[5] w-3 touch-none select-none rounded-full bg-neutral-900/[0.05] dark:bg-white/10"
+            // (Coloured by the PAPER, not by the app's theme: it sits on the page and the desk, and a dark app on sepia paper must not
+            // get a light thumb.)
+            className={`absolute right-0.5 z-[5] w-3 touch-none select-none rounded-full ${dark ? 'bg-white/[0.12]' : 'bg-[rgba(58,46,72,0.10)]'}`}
             style={{ display: 'none', top: BAR_MARGIN, bottom: BAR_MARGIN }}
           >
-            <div ref={thumbRef} data-testid="scrollbar-thumb" className="absolute inset-x-0.5 top-0 rounded-full bg-neutral-500/50 transition-colors hover:bg-neutral-600/70 dark:bg-neutral-300/40 dark:hover:bg-neutral-200/60">
+            <div
+              ref={thumbRef}
+              data-testid="scrollbar-thumb"
+              className={`absolute inset-x-0.5 top-0 rounded-full transition-colors ${
+                dark ? 'bg-[rgba(235,230,245,0.55)] hover:bg-[rgba(235,230,245,0.75)]' : 'bg-[rgba(58,46,72,0.62)] hover:bg-[rgba(58,46,72,0.82)]'
+              }`}
+            >
               <span
                 ref={tipRef}
                 data-testid="scrollbar-tip"

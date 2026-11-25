@@ -126,6 +126,11 @@ tests/      browser tests: real backend + production build + headless Chrome (te
   release because a page change per drag step can leave the view one page behind. A tooltip "Page N / total" shows while held. It
   follows the view by writing to the DOM from `syncPaper` (never React state — that runs on every scroll frame). The element is
   `data-overlay` (so `handlePointerDownCapture` ignores it) and `data-scrollbar` (the up/move capture handlers return early for it).
+  **Its colours follow the PAPER (`dark = paper === 'dark'`), never the app's `dark:` theme variants**: the bar sits on the page and
+  the desk, and a dark app theme on sepia paper got a light thumb that was invisible (contrast 1.02). Light paper → a dark aubergine
+  thumb, dark paper → a light one; scenario `barcolours` measures the real screen pixel under and over the thumb for six
+  theme × paper combinations and requires 3:1 (needs a screenshot decode — the paper canvas itself is transparent at the edge
+  and carries the dark-mode invert filter, so reading its pixels lies).
   Gotcha for tests: the tooltip must not carry `tabular-nums`, or the harness's `indicator()` (first `span.tabular-nums` that looks
   like `n / m`) reads the tooltip instead of the page counter.
 - **Links inside the PDF** (`reader/pdfLinks.js` pure + `LinkIndex`, `lib/openExternal.js`; wired in `ReaderCanvas`: `linksOn`, `linkAt`,
@@ -236,7 +241,7 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 cd backend  && npm test                  # 27 API tests (temp SQLite + data dir)
 cd frontend && npm test                  # 194 unit tests (geometry, ink, marks, export, find, snip, colour, open errors, keep-awake, undo history + ink diff, pdf links, start tool, scroll bar, i18n, shapes; i18n lists run-time key families in DYNAMIC)
 cd frontend && npm run build && cd ../tests && npm install && npm test   # browser tests (screenshots -> $E2E_OUT)
-cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links hand scrollbar library big   (384 checks in all)
+cd tests && node e2e.mjs reading         # one scenario: local cloud marks export share reading style openwith find mime errors awake dock snip pen tools undo links hand scrollbar barcolours library big   (390 checks in all)
 cd frontend && npm run dev               # proxies /api/auth -> :3902 (quarc-auth), /api -> :3908
 ```
 
