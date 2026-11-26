@@ -2157,6 +2157,30 @@ async function scenarioTools(browser, state) {
   els = await elements();
   const text = els.find((e) => e.type === 'text');
   check('the text tool puts typed text on the page', !!text && /Merhaba/.test(text.text), JSON.stringify(text && text.text));
+
+  // ----- a long text wraps inside the page instead of running off to the right (src/reader/textWrap.js) -----
+  await tool('text');
+  await page.mouse.click(box.x + 280, box.y + 200); // right of the text options panel the tool opens on the left
+  await sleep(400);
+  await page.keyboard.type(
+    'Call me Ishmael. Some years ago, never mind how long precisely, having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world.'
+  );
+  await sleep(300);
+  const editor = await page.$eval('textarea.excalidraw-wysiwyg', (t) => ({ ws: getComputedStyle(t).whiteSpace, sw: t.scrollWidth, cw: t.clientWidth }));
+  check('while typing, the text box wraps instead of growing to the right', editor.ws === 'pre-wrap' && editor.sw <= editor.cw + 2, JSON.stringify(editor));
+  await shot(page, '91a-wrapping-text');
+  await page.keyboard.press('Escape');
+  await sleep(1500);
+  els = await elements();
+  const para = els.find((e) => e.type === 'text' && /Ishmael/.test(e.originalText || e.text));
+  const pageRight = (595 * 96) / 72; // the test PDF's A4 pages, at x 0
+  check(
+    'a long text is a box of its own width, its lines wrapped',
+    !!para && para.autoResize === false && para.text.includes('\n') && !para.originalText.includes('\n'),
+    JSON.stringify(para && { autoResize: para.autoResize, text: para.text.slice(0, 90) })
+  );
+  check("...ending just inside the page's right edge", !!para && Math.abs(para.x + para.width - (pageRight - 16)) < 2, para && `${para.x} + ${para.width} vs ${pageRight}`);
+  check('...growing downwards, several lines', !!para && para.height > para.fontSize * 3, para && `${para.height} for font ${para.fontSize}`);
   const pageKeys = ((await dumpDb(page)).ann || []).map((r) => r.page_key);
   check('all of it is stored on page 1', pageKeys.join() === 'p0', pageKeys.join());
   await shot(page, '91-tools');

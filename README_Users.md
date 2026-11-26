@@ -89,6 +89,8 @@ image…) plus the **cut selection** tools; the slider icon has **Snap shapes** 
 pages, jumps to any page (tap the counter) and zooms.
 
 - **Eraser:** the rubber on the dock; drag across a stroke to erase it, press it again to go back to the pen.
+- **Text:** Tools → text, then click where it should start: the box reaches to the edge of the page and your words wrap onto
+  the next line. Drag instead of clicking to choose the width yourself; the box's side handles change it later.
 - **Colours:** the dots are the ready-made colours. The last, rainbow-coloured dot opens **recent colours** (the ones you used
   lately, newest first — the pen and the highlighter each have their own) and a **colour picker**: drag in the square, slide the
   hue, type or paste a code like `#12ab34`, or pick a colour from anywhere on the screen with the pipette (where your

@@ -191,6 +191,10 @@ tests/      browser tests: real backend + production build + headless Chrome (te
 - **Never `window.confirm` (or `alert`).** The Windows app shows this page from the server, and Tauri's dialog plugin (there for
   Save-as) replaces `window.confirm` with an async function whose dialog the page is not allowed to open: a Promise is truthy, so
   `if (!window.confirm(…)) return` went on without asking. Ask with `askConfirm()` from `components/ConfirmDialog.jsx`.
+- **A clicked text box would never wrap.** Excalidraw 0.18 gives a text box a fixed width (wrapping, `autoResize: false`) only
+  when the text tool is dragged; a click starts one line growing right without end. `reader/textWrap.js` sizes a click's box
+  from the page (`api.onPointerUp` runs just before Excalidraw's "wider than a few px?" check; the double-click path through
+  `onChange` also switches the open editor to `pre-wrap`, which Excalidraw sets only once). The same file is in Quarc Notes.
 - **No asset may be named `.mjs`.** pdf.js' worker is a module script, which browsers refuse unless the server calls it JavaScript,
   and the nginx image on the owner's server did not know `.mjs` (it sent a generic download): every PDF then failed with "Setting up
   fake worker failed: error loading dynamically imported module …/pdf.worker.min-<hash>.mjs" — shown as "could not be opened" /

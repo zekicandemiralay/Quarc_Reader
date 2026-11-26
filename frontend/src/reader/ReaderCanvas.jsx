@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Excalidraw, newElementWith, CaptureUpdateAction, reconcileElements, getSceneVersion } from '@excalidraw/excalidraw';
+import { Excalidraw, newElementWith, mutateElement, CaptureUpdateAction, reconcileElements, getSceneVersion } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import { useTranslation } from 'react-i18next';
 import { strokeToFreedrawElement } from '../lib/freehandElement';
@@ -38,6 +38,7 @@ import { startToolFor, isMouseDevice, touchPrimaryNow } from '../lib/device';
 import { getPlatform } from '../lib/updateCheck';
 import { openExternal } from '../lib/openExternal';
 import { snapshotScene, diffScene, applyInkChanges } from './inkDiff';
+import { wrapNewText } from './textWrap';
 import Toolbar from './Toolbar';
 import PageBar from './PageBar';
 import SelectionBar from './SelectionBar';
@@ -197,6 +198,7 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
   const hlHistory = useSettings((s) => s.hlColorHistory);
 
   const apiRef = useRef(null);
+  const stopTextWrapRef = useRef(null);
   const containerRef = useRef(null);
   const paperRef = useRef(null);
   const marksCanvasRef = useRef(null);
@@ -643,7 +645,22 @@ const ReaderCanvas = forwardRef(function ReaderCanvas(
 
   function handleExcalidrawAPI(api) {
     apiRef.current = api;
+    // New text boxes wrap within the page they start on (textWrap.js).
+    stopTextWrapRef.current?.();
+    stopTextWrapRef.current = api
+      ? wrapNewText(api, {
+          mutateElement,
+          pageAt: (x, y) => {
+            const L = layoutRef.current;
+            const i = pageUnder(L, x, y);
+            if (i < 0) return null;
+            const r = pageRect(L, i);
+            return { left: r.x, right: r.x + r.width };
+          },
+        })
+      : null;
   }
+  useEffect(() => () => stopTextWrapRef.current?.(), []);
 
   function handleExcalidrawChange(elements, appState) {
     const toolType = appState?.activeTool?.type;
